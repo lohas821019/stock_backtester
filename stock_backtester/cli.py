@@ -499,12 +499,14 @@ def cmd_watch_entry(ctx, stock, notify):
             if token and chat_id and token != "your_bot_token_here":
                 notifier = TelegramNotifier(token=token, chat_id=chat_id)
                 status_msg = (
-                    f"🎯 <b>{stock} 空手進場雷達狀態</b>\n"
-                    f"現價: ${latest_c:.2f} (季線 {bias:+.2f}%)\n"
-                    f"• 右側突破點: ${roll_20_h:.2f} (差 +{pct_breakout:.2f}%)\n"
-                    f"• 季線抄底區: ${pullback_min_p:.2f} ~ ${pullback_max_p:.2f} (差 -{pct_pullback:.2f}%)\n"
-                    f"• 恐慌抄底點: &le; ${capitulation_p:.2f}\n"
-                    f"目前狀態: ⏳ 監控中，滿足條件即刻通知"
+                    f"🎯 <b>{stock} 空手進場雷達狀態</b>\n\n"
+                    f"📊 <b>最新行情與雷達價位：</b>\n"
+                    f"• 現價：<b>${latest_c:.2f}</b> (季線 {bias:+.2f}%)\n"
+                    f"• 🚀 <b>右側突破點</b>：${roll_20_h:.2f} (差 +{pct_breakout:.2f}%)\n"
+                    f"• 🎯 <b>第一梯隊(季線回踩)</b>：${pullback_min_p:.2f} ~ ${pullback_max_p:.2f} (差 -{pct_pullback:.2f}%)\n"
+                    f"• 🌟 <b>第二梯隊(波段黃金)</b>：${tier2_min_p:.2f} ~ ${tier2_max_p:.2f} (距高點 -8%~-10%)\n"
+                    f"• 🛡️ <b>第三梯隊(恐慌超跌)</b>：≤ ${capitulation_p:.2f} (季線負乖離 ≤ -6%)\n\n"
+                    f"⏳ <b>目前狀態</b>：實時監控中，滿足條件即刻推播！"
                 )
                 if notifier.send(status_msg):
                     console.print("[green]✅ 已發送 Telegram 雷達狀態推播！[/green]")
