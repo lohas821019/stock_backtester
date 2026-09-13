@@ -39,13 +39,14 @@ class TelegramNotifier:
         self._token = token
         self._chat_id = chat_id
 
-    def send(self, text: str, parse_mode: str = "HTML") -> bool:
+    def send(self, text: str, parse_mode: str = "HTML", disable_web_page_preview: bool = True) -> bool:
         """
         發送文字訊息。
 
         Args:
-            text:       訊息內容（支援 HTML 或 Markdown 格式）
-            parse_mode: "HTML" 或 "Markdown"
+            text:                     訊息內容（支援 HTML 或 Markdown 格式）
+            parse_mode:               "HTML" 或 "Markdown"
+            disable_web_page_preview: 是否關閉網址預覽卡片（預設 True 保持版面乾淨）
 
         Returns:
             True = 發送成功，False = 失敗
@@ -55,6 +56,7 @@ class TelegramNotifier:
             "chat_id": self._chat_id,
             "text": text,
             "parse_mode": parse_mode,
+            "disable_web_page_preview": disable_web_page_preview,
         }
         try:
             resp = requests.post(url, json=payload, timeout=10)

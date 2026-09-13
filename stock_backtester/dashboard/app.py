@@ -1200,14 +1200,15 @@ elif page == "🔬 回測分析實驗室":
                         try:
                             from stock_backtester.notifiers.telegram_notifier import TelegramNotifier
                             notifier = TelegramNotifier(token=input_token.strip(), chat_id=input_chat_id.strip())
+                            quote_url = f"https://tw.stock.yahoo.com/quote/{symbol}.TW"
                             test_msg = (
                                 f"🎯 <b>{symbol} 空手進場雷達已連線！</b>\n\n"
                                 f"📊 <b>最新行情與雷達價位：</b>\n"
-                                f"• 現價：<b>${latest_c:.2f}</b> (季線乖離 {bias_val:+.2f}%)\n"
-                                f"• 🚀 <b>右側強勢突破價</b>：${roll_20_h:.2f} (差 {dist_breakout:+.2f} 元 / +{pct_breakout:.2f}%)\n"
-                                f"• 🎯 <b>第一梯隊(季線回踩)</b>：${pullback_min_p:.2f} ~ ${pullback_max_p:.2f} (差 {dist_pullback:+.2f} 元 / {pct_pullback:+.2f}%)\n"
-                                f"• 🌟 <b>第二梯隊(波段黃金)</b>：${tier2_min_p:.2f} ~ ${tier2_max_p:.2f} (距高點 -8%~-10%)\n"
-                                f"• 🛡️ <b>第三梯隊(恐慌超跌)</b>：≤ ${capitulation_p:.2f} (季線負乖離 ≤ -6%)\n\n"
+                                f"• 現價：<a href='{quote_url}'><b>{latest_c:.2f} 元</b></a> (季線乖離 {bias_val:+.2f}%)\n"
+                                f"• 🚀 <b>右側強勢突破價</b>：<a href='{quote_url}'><b>{roll_20_h:.2f} 元</b></a> (差 {dist_breakout:+.2f} 元 / +{pct_breakout:.2f}%)\n"
+                                f"• 🎯 <b>第一梯隊(季線回踩)</b>：<a href='{quote_url}'><b>{pullback_min_p:.2f} ~ {pullback_max_p:.2f} 元</b></a> (差 {dist_pullback:+.2f} 元)\n"
+                                f"• 🌟 <b>第二梯隊(波段黃金)</b>：<a href='{quote_url}'><b>{tier2_min_p:.2f} ~ {tier2_max_p:.2f} 元</b></a> (距高點 -8%~-10%)\n"
+                                f"• 🛡️ <b>第三梯隊(恐慌超跌)</b>：≤ <a href='{quote_url}'><b>{capitulation_p:.2f} 元</b></a> (季線負乖離 ≤ -6%)\n\n"
                                 f"⏳ <b>狀態</b>：實時監控中，滿足任一條件立即推播通知！"
                             )
                             if notifier.send(test_msg):
