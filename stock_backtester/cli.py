@@ -415,6 +415,13 @@ def cmd_watch_entry(ctx, stock, notify):
     dist_breakout = roll_20_h - latest_c
     pct_breakout = (dist_breakout / latest_c) * 100.0
 
+    pullback_min_p = ma60 * 0.98
+    pullback_max_p = ma60 * 1.01
+    is_pullback = (-2.0 <= bias <= 1.0) and (latest_c > latest_o)
+
+    dist_pullback = latest_c - pullback_max_p
+    pct_pullback = (dist_pullback / latest_c) * 100.0
+
     is_breakout = (latest_c > roll_20_h and bias > 0)
     is_panic = (bias <= -6.0 and latest_c > latest_o)
 
@@ -428,12 +435,19 @@ def cmd_watch_entry(ctx, stock, notify):
     table.add_row(
         "🚀 右側強勢突破點",
         f"${roll_20_h:.2f}",
-        f"[green]🚨 已滿足突破進場！[/green]" if is_breakout else f"[yellow]距離僅差 {dist_breakout:+.2f} 元 ({pct_breakout:+.2f}%)[/yellow]"
+        f"[green]🚨 已滿足突破進場！[/green]" if is_breakout else f"[yellow]距離僅差 {dist_breakout:+.2f} 元 (+{pct_breakout:.2f}%)[/yellow]"
     )
     table.add_row(
-        "🛡️ 左側恐慌抄底點",
+        "🎯 季線回踩抄底區",
+        f"${pullback_min_p:.2f} ~ ${pullback_max_p:.2f}",
+        f"[green]🚨 已在抄底區且收紅！[/green]" if is_pullback else (
+            f"[cyan]拉回 {pct_pullback:.2f}% (約差 {dist_pullback:.2f} 元) 進抄底區[/cyan]" if latest_c > pullback_max_p else "[yellow]低於回踩區[/yellow]"
+        )
+    )
+    table.add_row(
+        "🛡️ 極度恐慌抄底點",
         f"<= ${capitulation_p:.2f}",
-        f"[green]🚨 已滿足恐慌抄底！[/green]" if is_panic else f"[dim]需拉回 {((latest_c - capitulation_p)/latest_c)*-100:.2f}%[/dim]"
+        f"[green]🚨 已滿足恐慌抄底！[/green]" if is_panic else f"[dim]需拉回 {((latest_c - capitulation_p)/latest_c)*100:.2f}%[/dim]"
     )
 
     console.print(table)

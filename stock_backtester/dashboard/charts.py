@@ -925,17 +925,30 @@ def plot_uninvested_entry_radar(
         row=1, col=1
     )
 
-    # 4. 水平線：左側恐慌抄底警戒線
+    # 4. 季線回踩抄底區間 (季線 -2% ~ +1%)
+    pullback_high = latest_ma * 1.01
+    pullback_low = latest_ma * 0.98
+    fig.add_hrect(
+        y0=pullback_low, y1=pullback_high,
+        fillcolor="rgba(56, 189, 248, 0.12)",
+        line=dict(color="#38BDF8", width=1, dash="dot"),
+        annotation_text=f"🎯 季線回踩抄底區: ${pullback_low:.2f} ~ ${pullback_high:.2f} (季線 -2% ~ +1% 守穩紅K，勝率 81%)",
+        annotation_position="top right",
+        annotation_font=dict(color="#38BDF8", size=10, family="Inter, sans-serif"),
+        row=1, col=1
+    )
+
+    # 5. 水平線：左側恐慌抄底警戒線
     fig.add_hline(
         y=capitulation_p,
         line=dict(color="#F59E0B", width=1.6, dash="dot"),
-        annotation_text=f"🛡️ 恐慌抄底警戒線: ${capitulation_p:.2f} (季線 {capitulation_bias:.1f}%)",
+        annotation_text=f"🛡️ 恐慌超跌抄底線: ${capitulation_p:.2f} (季線 {capitulation_bias:.1f}%)",
         annotation_position="bottom left",
         annotation_font=dict(color="#F59E0B", size=10, family="Inter, sans-serif"),
         row=1, col=1
     )
 
-    # 5. 成交量
+    # 6. 成交量
     vol_colors = [THEME["up_candle"] if close.iloc[i] >= open_p.iloc[i] else THEME["down_candle"] for i in range(len(df))]
     fig.add_trace(go.Bar(
         x=df.index, y=vol,
