@@ -1,0 +1,33 @@
+name: 0050 盤中與收盤進場雷達推播 (Intraday Radar)
+
+on:
+  schedule:
+    # 台灣時間週一至週五 09:00 ~ 13:30 (UTC 01:00 ~ 05:30) 每 15 分鐘巡檢一次
+    # 包含 13:40 (UTC 05:40) 收盤大總結推播
+    - cron: '*/15 1-5 * * 1-5'
+  workflow_dispatch: # 支援在 GitHub 網頁上手動點擊立即測試
+
+jobs:
+  check-and-alert:
+    runs-on: ubuntu-latest
+    steps:
+      - name: 簽出專案代碼 (Checkout repository)
+        uses: actions/checkout@v4
+
+      - name: 設定 Python 環境 (Set up Python)
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+
+      - name: 安裝專案相依套件 (Install dependencies)
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e .
+
+      - name: 執行 0050 盤中與收盤即時雷達檢測並推播 Telegram (Run Radar Check)
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+        run: |
+          python -m stock_backtester.cli watch-entry --stock 0050 --notify

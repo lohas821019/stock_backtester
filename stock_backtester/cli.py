@@ -380,10 +380,12 @@ def cmd_scan(ctx, scan_date_str, dry_run):
 @main.command("watch-entry")
 @click.option("--stock", "-s", default="0050", help="股票代號（預設：0050）")
 @click.option("--notify", is_flag=True, default=False, help="若滿足進場條件則發送 Telegram 通知")
+@click.option("--intraday/--no-intraday", default=True, help="是否優先抓取盤中即時報價（預設開啟）")
 @click.pass_context
-def cmd_watch_entry(ctx, stock, notify):
-    """即時監控標的空手進場點雷達（右側突破 $110.75 / 左側抄底 $98.55）。"""
+def cmd_watch_entry(ctx, stock, notify, intraday):
+    """即時監控標的空手進場點雷達（支援盤中即時報價與回踩/突破觸碰偵測）。"""
     from datetime import date, timedelta
+    import requests
     from stock_backtester.data.data_manager import DataManager
     from stock_backtester.notifiers.telegram_notifier import TelegramNotifier
 
@@ -400,11 +402,39 @@ def cmd_watch_entry(ctx, stock, notify):
 
     close = df["close"]
     high = df["high"]
+    low_s = df["low"]
     open_p = df["open"]
 
     latest_c = float(close.iloc[-1])
     latest_o = float(open_p.iloc[-1])
+    latest_h = float(high.iloc[-1])
+    latest_l = float(low_s.iloc[-1])
     latest_dt = df.index[-1].strftime("%Y-%m-%d")
+
+    # 嘗試抓取 TWSE 即時報價（若有開盤或最新撮合）
+    is_realtime = False
+    if intraday:
+        try:
+            twse_url = f"https://mis.twse.com.tw/stock/api/getStockInfo.jsp?ex_ch=tse_{stock}.tw&json=1&delay=0"
+            r_rt = requests.get(twse_url, headers={"User-Agent": "Mozilla/5.0"}, timeout=3)
+            items = r_rt.json().get("msgArray", [])
+            if items:
+                it = items[0]
+                z = it.get("z")
+                if z == "-" or not z:
+                    bids = it.get("b", "_").split("_")
+                    z = bids[0] if bids and bids[0] != "" else it.get("y")
+                if z and z != "-":
+                    latest_c = float(z)
+                    is_realtime = True
+                if it.get("h") and it.get("h") != "-":
+                    latest_h = max(latest_h, float(it.get("h")))
+                if it.get("l") and it.get("l") != "-":
+                    latest_l = min(latest_l, float(it.get("l")))
+                if it.get("o") and it.get("o") != "-":
+                    latest_o = float(it.get("o"))
+        except Exception:
+            pass
 
     ma60 = float(close.rolling(60, min_periods=1).mean().iloc[-1])
     bias = (latest_c - ma60) / ma60 * 100.0
@@ -417,19 +447,24 @@ def cmd_watch_entry(ctx, stock, notify):
 
     pullback_min_p = ma60 * 0.98
     pullback_max_p = ma60 * 1.01
+    # 盤中觸碰判定
     is_pullback = (-2.0 <= bias <= 1.0) and (latest_c > latest_o)
+    is_touch_pullback = (latest_l <= pullback_max_p and latest_c >= pullback_min_p * 0.98)
 
     tier2_max_p = roll_20_h * 0.92
     tier2_min_p = roll_20_h * 0.90
     dist_tier2 = latest_c - tier2_max_p
     pct_tier2 = (dist_tier2 / latest_c) * 100.0
     is_tier2 = (tier2_min_p <= latest_c <= tier2_max_p) and (latest_c > latest_o)
+    is_touch_tier2 = (latest_l <= tier2_max_p and latest_c >= tier2_min_p * 0.98)
 
     dist_pullback = latest_c - pullback_max_p
     pct_pullback = (dist_pullback / latest_c) * 100.0
 
     is_breakout = (latest_c > roll_20_h and bias > 0)
+    is_touch_breakout = (latest_h >= roll_20_h)
     is_panic = (bias <= -6.0 and latest_c > latest_o)
+    is_touch_panic = (latest_l <= capitulation_p)
 
     table = Table(title=f"🎯 {stock} 空手進場點雷達監控 (截至 {latest_dt})", show_header=True, header_style="bold cyan")
     table.add_column("監控維度", style="bold")
@@ -465,21 +500,40 @@ def cmd_watch_entry(ctx, stock, notify):
 
     console.print(table)
 
-    signal_triggered = is_breakout or is_pullback or is_tier2 or is_panic
+    signal_triggered = is_breakout or is_pullback or is_tier2 or is_panic or is_touch_breakout or is_touch_pullback or is_touch_tier2 or is_touch_panic
     if signal_triggered:
         reasons = []
-        if is_breakout: reasons.append("🚀 突破 20 日高點")
-        if is_pullback: reasons.append("🎯 第一梯隊：季線回踩守穩收紅")
-        if is_tier2: reasons.append("🌟 第二梯隊：波段黃金拉回區收紅")
-        if is_panic: reasons.append("🛡️ 第三梯隊：季線負乖離超跌落底")
+        if is_breakout:
+            reasons.append("🚀 突破 20 日高點")
+        elif is_touch_breakout:
+            reasons.append(f"⚡ 盤中觸碰突破價 (最高 {latest_h:.2f} 元)")
+
+        if is_pullback:
+            reasons.append("🎯 第一梯隊：季線回踩守穩收紅")
+        elif is_touch_pullback:
+            reasons.append(f"⚡ 盤中踩入第一梯隊抄底區 (最低 {latest_l:.2f} 元)")
+
+        if is_tier2:
+            reasons.append("🌟 第二梯隊：波段黃金拉回區收紅")
+        elif is_touch_tier2:
+            reasons.append(f"⚡ 盤中踩入第二梯隊黃金區 (最低 {latest_l:.2f} 元)")
+
+        if is_panic:
+            reasons.append("🛡️ 第三梯隊：季線負乖離超跌落底")
+        elif is_touch_panic:
+            reasons.append(f"⚡ 盤中觸碰極度恐慌底 (最低 {latest_l:.2f} 元)")
+
         reason_str = " & ".join(reasons)
+        quote_url = f"https://tw.stock.yahoo.com/quote/{stock}.TW"
 
         action_msg = (
-            f"🚨 <b>{stock} 觸發進場訊號！</b>\n"
-            f"最新價: ${latest_c:.2f}\n"
-            f"訊號類型: {reason_str}\n"
-            f"季線乖離: {bias:+.2f}%\n"
-            f"時間: {latest_dt}"
+            f"🚨 <b>【{stock} 進場雷達快訊】</b>\n\n"
+            f"• 訊號類型：<b>{reason_str}</b>\n"
+            f"• 最新成交價：<a href='{quote_url}'><b>{latest_c:.2f} 元</b></a>\n"
+            f"• 盤中高低：最高 {latest_h:.2f} 元 / 最低 {latest_l:.2f} 元\n"
+            f"• 季線 MA60：{ma60:.2f} 元 (乖離 {bias:+.2f}%)\n"
+            f"• 監控時間：{latest_dt}\n\n"
+            f"💡 <b>操作建議</b>：請留意盤面守穩狀況，依紀律進場並設好 -8% 停損防守。"
         )
         console.print(f"\n[bold green]🚨 買進訊號已觸發：{reason_str}！[/bold green]")
         if notify:
@@ -487,7 +541,7 @@ def cmd_watch_entry(ctx, stock, notify):
             if token and chat_id and token != "your_bot_token_here":
                 notifier = TelegramNotifier(token=token, chat_id=chat_id)
                 notifier.send(action_msg)
-                console.print("[green]✅ 已發送 Telegram 通知！[/green]")
+                console.print("[green]✅ 已發送 Telegram 即時通知！[/green]")
             else:
                 console.print("[yellow]⚠️ 未設定 Telegram憑證，請在 .env 填入 TELEGRAM_BOT_TOKEN 與 TELEGRAM_CHAT_ID。[/yellow]")
     else:
