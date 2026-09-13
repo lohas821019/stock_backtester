@@ -419,6 +419,12 @@ def cmd_watch_entry(ctx, stock, notify):
     pullback_max_p = ma60 * 1.01
     is_pullback = (-2.0 <= bias <= 1.0) and (latest_c > latest_o)
 
+    tier2_max_p = roll_20_h * 0.92
+    tier2_min_p = roll_20_h * 0.90
+    dist_tier2 = latest_c - tier2_max_p
+    pct_tier2 = (dist_tier2 / latest_c) * 100.0
+    is_tier2 = (tier2_min_p <= latest_c <= tier2_max_p) and (latest_c > latest_o)
+
     dist_pullback = latest_c - pullback_max_p
     pct_pullback = (dist_pullback / latest_c) * 100.0
 
@@ -438,31 +444,72 @@ def cmd_watch_entry(ctx, stock, notify):
         f"[green]🚨 已滿足突破進場！[/green]" if is_breakout else f"[yellow]距離僅差 {dist_breakout:+.2f} 元 (+{pct_breakout:.2f}%)[/yellow]"
     )
     table.add_row(
-        "🎯 季線回踩抄底區",
+        "🎯 第一梯隊：季線回踩區",
         f"${pullback_min_p:.2f} ~ ${pullback_max_p:.2f}",
-        f"[green]🚨 已在抄底區且收紅！[/green]" if is_pullback else (
+        f"[green]🚨 已在回踩區且收紅！[/green]" if is_pullback else (
             f"[cyan]拉回 {pct_pullback:.2f}% (約差 {dist_pullback:.2f} 元) 進抄底區[/cyan]" if latest_c > pullback_max_p else "[yellow]低於回踩區[/yellow]"
         )
     )
     table.add_row(
-        "🛡️ 極度恐慌抄底點",
+        "🌟 第二梯隊：波段黃金區",
+        f"${tier2_min_p:.2f} ~ ${tier2_max_p:.2f}",
+        f"[green]🚨 已在黃金區且收紅！[/green]" if is_tier2 else (
+            f"[magenta]距前高拉回 -8%~-10% (差 {dist_tier2:.2f} 元)[/magenta]" if latest_c > tier2_max_p else "[yellow]低於黃金區[/yellow]"
+        )
+    )
+    table.add_row(
+        "🛡️ 第三梯隊：極度恐慌點",
         f"<= ${capitulation_p:.2f}",
         f"[green]🚨 已滿足恐慌抄底！[/green]" if is_panic else f"[dim]需拉回 {((latest_c - capitulation_p)/latest_c)*100:.2f}%[/dim]"
     )
 
     console.print(table)
 
-    if is_breakout or is_panic:
-        action_msg = f"🚀 <b>{stock} 出現買進訊號！</b>\n最新價: ${latest_c:.2f}\n原因: " + ("突破 20 日高點" if is_breakout else "季線超跌落底翻紅")
-        console.print(f"\n[bold green]🚨 買進訊號已觸發！[/bold green]")
+    signal_triggered = is_breakout or is_pullback or is_tier2 or is_panic
+    if signal_triggered:
+        reasons = []
+        if is_breakout: reasons.append("🚀 突破 20 日高點")
+        if is_pullback: reasons.append("🎯 第一梯隊：季線回踩守穩收紅")
+        if is_tier2: reasons.append("🌟 第二梯隊：波段黃金拉回區收紅")
+        if is_panic: reasons.append("🛡️ 第三梯隊：季線負乖離超跌落底")
+        reason_str = " & ".join(reasons)
+
+        action_msg = (
+            f"🚨 <b>{stock} 觸發進場訊號！</b>\n"
+            f"最新價: ${latest_c:.2f}\n"
+            f"訊號類型: {reason_str}\n"
+            f"季線乖離: {bias:+.2f}%\n"
+            f"時間: {latest_dt}"
+        )
+        console.print(f"\n[bold green]🚨 買進訊號已觸發：{reason_str}！[/bold green]")
         if notify:
             token, chat_id = _load_env_to_os()
             if token and chat_id and token != "your_bot_token_here":
                 notifier = TelegramNotifier(token=token, chat_id=chat_id)
                 notifier.send(action_msg)
                 console.print("[green]✅ 已發送 Telegram 通知！[/green]")
+            else:
+                console.print("[yellow]⚠️ 未設定 Telegram憑證，請在 .env 填入 TELEGRAM_BOT_TOKEN 與 TELEGRAM_CHAT_ID。[/yellow]")
     else:
-        console.print(f"\n[cyan]⏳ 目前持續追蹤中：距離突破進場價 ${roll_20_h:.2f} 僅差 +{pct_breakout:.2f}%。[/cyan]")
+        console.print(f"\n[cyan]⏳ 目前持續追蹤中：[/cyan]")
+        console.print(f"  • 距【右側突破進場價 ${roll_20_h:.2f}】僅差 [bold green]+{pct_breakout:.2f}%[/bold green]")
+        console.print(f"  • 距【第一梯隊季線回踩區 ${pullback_min_p:.2f} ~ ${pullback_max_p:.2f}】僅差 [bold cyan]-{pct_pullback:.2f}%[/bold cyan]")
+        if notify:
+            token, chat_id = _load_env_to_os()
+            if token and chat_id and token != "your_bot_token_here":
+                notifier = TelegramNotifier(token=token, chat_id=chat_id)
+                status_msg = (
+                    f"🎯 <b>{stock} 空手進場雷達狀態</b>\n"
+                    f"現價: ${latest_c:.2f} (季線 {bias:+.2f}%)\n"
+                    f"• 右側突破點: ${roll_20_h:.2f} (差 +{pct_breakout:.2f}%)\n"
+                    f"• 季線抄底區: ${pullback_min_p:.2f} ~ ${pullback_max_p:.2f} (差 -{pct_pullback:.2f}%)\n"
+                    f"• 恐慌抄底點: &le; ${capitulation_p:.2f}\n"
+                    f"目前狀態: ⏳ 監控中，滿足條件即刻通知"
+                )
+                if notifier.send(status_msg):
+                    console.print("[green]✅ 已發送 Telegram 雷達狀態推播！[/green]")
+            else:
+                console.print("[dim]提示：加上 Telegram 通知可在 .env 設定憑證。[/dim]")
 
 
 if __name__ == "__main__":

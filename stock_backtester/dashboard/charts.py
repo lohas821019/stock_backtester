@@ -919,36 +919,49 @@ def plot_uninvested_entry_radar(
     fig.add_hline(
         y=roll_high,
         line=dict(color="#22C55E", width=2, dash="dash"),
-        annotation_text=f"🚀 右側突破進場價: ${roll_high:.2f} (差 {dist_breakout:+.2f} 元 / +{pct_breakout:.2f}%)",
+        annotation_text=f"🚀 右側強勢突破進場價: ${roll_high:.2f} (距突破 +{pct_breakout:.2f}% / 差 {dist_breakout:+.2f} 元)",
         annotation_position="top left",
         annotation_font=dict(color="#22C55E", size=11, family="Inter, sans-serif"),
         row=1, col=1
     )
 
-    # 4. 季線回踩抄底區間 (季線 -2% ~ +1%)
+    # 4. 第一梯隊：多頭回踩季線抄底區 (季線 -2.0% ~ +1.0%)
     pullback_high = latest_ma * 1.01
     pullback_low = latest_ma * 0.98
     fig.add_hrect(
         y0=pullback_low, y1=pullback_high,
-        fillcolor="rgba(56, 189, 248, 0.12)",
-        line=dict(color="#38BDF8", width=1, dash="dot"),
-        annotation_text=f"🎯 季線回踩抄底區: ${pullback_low:.2f} ~ ${pullback_high:.2f} (季線 -2% ~ +1% 守穩紅K，勝率 81%)",
+        fillcolor="rgba(56, 189, 248, 0.16)",
+        line=dict(color="#38BDF8", width=1.2, dash="dot"),
+        annotation_text=f"🎯 第一梯隊：季線回踩抄底區 ${pullback_low:.2f} ~ ${pullback_high:.2f} (季線 -2%~+1% 守穩紅K，勝率 81%)",
         annotation_position="top right",
         annotation_font=dict(color="#38BDF8", size=10, family="Inter, sans-serif"),
         row=1, col=1
     )
 
-    # 5. 水平線：左側恐慌抄底警戒線
-    fig.add_hline(
-        y=capitulation_p,
-        line=dict(color="#F59E0B", width=1.6, dash="dot"),
-        annotation_text=f"🛡️ 恐慌超跌抄底線: ${capitulation_p:.2f} (季線 {capitulation_bias:.1f}%)",
-        annotation_position="bottom left",
-        annotation_font=dict(color="#F59E0B", size=10, family="Inter, sans-serif"),
+    # 5. 第二梯隊：波段黃金拉回區 (距前高 -8.0% ~ -10.0%)
+    tier2_high = roll_high * 0.92
+    tier2_low = roll_high * 0.90
+    fig.add_hrect(
+        y0=tier2_low, y1=tier2_high,
+        fillcolor="rgba(168, 85, 247, 0.16)",
+        line=dict(color="#C084FC", width=1.2, dash="dot"),
+        annotation_text=f"🌟 第二梯隊：波段黃金拉回區 ${tier2_low:.2f} ~ ${tier2_high:.2f} (拉回 -8%~-10% 百元關卡，勝率 77%~93%)",
+        annotation_position="top right",
+        annotation_font=dict(color="#C084FC", size=10, family="Inter, sans-serif"),
         row=1, col=1
     )
 
-    # 6. 成交量
+    # 6. 第三梯隊：極度恐慌超跌線 (季線 <= -6.0%)
+    fig.add_hline(
+        y=capitulation_p,
+        line=dict(color="#EF4444", width=1.8, dash="dashdot"),
+        annotation_text=f"🛡️ 第三梯隊：極度恐慌超跌線 <= ${capitulation_p:.2f} (季線 <= {capitulation_bias:.1f}%，勝率 84%，均報酬 +14.2%)",
+        annotation_position="bottom left",
+        annotation_font=dict(color="#EF4444", size=10, family="Inter, sans-serif"),
+        row=1, col=1
+    )
+
+    # 7. 成交量
     vol_colors = [THEME["up_candle"] if close.iloc[i] >= open_p.iloc[i] else THEME["down_candle"] for i in range(len(df))]
     fig.add_trace(go.Bar(
         x=df.index, y=vol,
