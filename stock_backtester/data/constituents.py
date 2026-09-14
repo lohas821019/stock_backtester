@@ -75,3 +75,35 @@ def get_taiwan_50_symbols() -> list[str]:
 def get_taiwan_50_options() -> list[str]:
     """取得格式化顯示選項（如 '2330 台積電'）。"""
     return [f"{item['symbol']} {item['name']}" for item in TAIWAN_50_STOCKS]
+
+
+# ── 美股熱門指數 ETF 與科技權值股清單 ──────────────────────────────────
+US_POPULAR_STOCKS: list[dict[str, str]] = [
+    {"symbol": "NVDA", "name": "輝達 (NVIDIA)"},
+    {"symbol": "AAPL", "name": "蘋果 (Apple)"},
+    {"symbol": "MSFT", "name": "微軟 (Microsoft)"},
+    {"symbol": "GOOGL", "name": "Alphabet (Google)"},
+    {"symbol": "AMZN", "name": "亞馬遜 (Amazon)"},
+    {"symbol": "TSLA", "name": "特斯拉 (Tesla)"},
+    {"symbol": "META", "name": "Meta (Facebook)"},
+    {"symbol": "TSM", "name": "台積電 ADR"},
+    {"symbol": "AVGO", "name": "博通 (Broadcom)"},
+    {"symbol": "AMD", "name": "超微 (AMD)"},
+    {"symbol": "QQQ", "name": "那斯達克100 ETF (Invesco QQQ)"},
+    {"symbol": "SPY", "name": "標普500 ETF (SPDR S&P 500)"},
+    {"symbol": "SOXX", "name": "費城半導體 ETF (iShares)"},
+    {"symbol": "SMH", "name": "VanEck 半導體 ETF"},
+    {"symbol": "PLTR", "name": "Palantir"},
+    {"symbol": "COIN", "name": "Coinbase"},
+    {"symbol": "ARM", "name": "Arm Holdings"},
+    {"symbol": "MU", "name": "美光科技 (Micron)"},
+    {"symbol": "ASML", "name": "艾司摩爾 (ASML)"},
+    {"symbol": "INTC", "name": "英特爾 (Intel)"},
+]
+
+US_POPULAR_MAP: dict[str, str] = {item["symbol"]: item["name"] for item in US_POPULAR_STOCKS}
+
+
+def get_us_popular_options() -> list[str]:
+    """取得美股熱門標的格式化清單。"""
+    return [f"{item['symbol']} {item['name']}" for item in US_POPULAR_STOCKS]

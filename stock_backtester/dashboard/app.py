@@ -383,7 +383,7 @@ def _render_kpi_card(label: str, value: str, sub: str = "", status: str = "neutr
 with st.sidebar:
     page = st.radio(
         "導航功能",
-        ["🔬 回測分析實驗室", "📋 策略庫總覽"],
+        ["🔬 回測分析實驗室", "🇺🇸 美股量化監控與進場雷達", "📋 策略庫總覽"],
         label_visibility="collapsed",
     )
     st.markdown("---")
@@ -1302,3 +1302,309 @@ elif page == "🔬 回測分析實驗室":
             file_name=f"{symbol}_adjusted_ohlcv.csv",
             mime="text/csv",
         )
+
+
+# ════════════════════════════════════════════════════════════════════════
+# 🇺🇸 美股量化監控與進場雷達 (US Stock Radar View)
+# ════════════════════════════════════════════════════════════════════════
+
+elif page == "🇺🇸 美股量化監控與進場雷達":
+
+    st.markdown('<div class="hero-title">🇺🇸 美股量化監控與進場雷達</div>', unsafe_allow_html=True)
+    st.markdown('<div class="hero-sub">抓取過去 10 年美股真實還原歷史行情，透過高勝率量化策略模型即時計算空手最佳進場梯隊與右側突破點。</div>', unsafe_allow_html=True)
+
+    from stock_backtester.data.constituents import US_POPULAR_STOCKS, get_us_popular_options
+    from stock_backtester.strategies import list_strategies, get_strategy
+
+    with st.sidebar:
+        st.markdown("#### 🇺🇸 **美股標的選擇**")
+        us_options = ["(自訂輸入代號)"] + get_us_popular_options()
+        selected_us = st.selectbox(
+            "快捷美股標的",
+            us_options,
+            index=1,  # 預設 NVDA
+            help="快速選擇熱門美股巨頭或科技 ETF (QQQ, SPY, SOXX 等)",
+        )
+
+        if selected_us != "(自訂輸入代號)":
+            us_symbol = selected_us.split()[0]
+            st.text_input("美股代號 (Symbol)", value=us_symbol, disabled=True)
+        else:
+            us_symbol = st.text_input("美股代號 (Symbol)", value="NVDA", help="輸入如 NVDA, AAPL, MSFT, QQQ, TSM").strip().upper()
+
+        st.markdown("---")
+        st.markdown("#### 🧠 **回測策略與評估模型**")
+        all_strats = list_strategies()
+        strat_opts = [s["name"] for s in all_strats]
+        def_strat_idx = strat_opts.index("dip_hunter_alpha") if "dip_hunter_alpha" in strat_opts else 0
+        chosen_strat_name = st.selectbox("選定參考策略", strat_opts, index=def_strat_idx)
+
+        st.markdown("---")
+        st.markdown("#### ⏳ **歷史資料長度**")
+        hist_years = st.select_slider(
+            "回測歷史跨度 (年)",
+            options=[1, 3, 5, 10],
+            value=10,
+            help="系統預設載入過去 10 年完整還原股價進行長期量化壓力測試",
+        )
+
+        st.markdown("---")
+        us_capital = st.number_input(
+            "初始投資本金 (USD)",
+            value=100_000,
+            step=10_000,
+            min_value=10_000,
+        )
+
+        st.markdown("")
+        col_us_btn1, col_us_btn2 = st.columns([3, 1])
+        with col_us_btn1:
+            run_us_btn = st.button("🚀 執行美股雷達運算", use_container_width=True)
+        with col_us_btn2:
+            if st.button("🔄", help="立即清空快取並重抓最新報價", key="btn_clear_cache_us"):
+                st.cache_data.clear()
+                st.rerun()
+
+    us_symbol = us_symbol.strip().upper()
+    if not us_symbol:
+        st.warning("⚠️ 請於左側輸入美股代號（例如 NVDA、AAPL、QQQ）。")
+        st.stop()
+
+    today_us = date.today()
+    start_us = date(today_us.year - hist_years, today_us.month, today_us.day)
+
+    with st.spinner(f"正在自 Yahoo Finance 抓取 {us_symbol} 過去 {hist_years} 年完整還原行情並進行量化運算..."):
+        try:
+            df_us, is_us_cached = _load_data(us_symbol, start_us, today_us, market="us", cache_version="v2_us")
+            if df_us.empty:
+                st.error(f"❌ 查無美股代號 **{us_symbol}** 的行情數據，請確認代號正確性。")
+                st.stop()
+
+            # 確保資料清洗無 NaN
+            df_us = df_us.dropna(subset=["open", "high", "low", "close"]).copy()
+            df_us = df_us[(df_us["open"] > 0) & (df_us["close"] > 0)]
+
+            # 執行回測引擎評估
+            us_strat_cls = get_strategy(chosen_strat_name)
+            us_strat_instance = us_strat_cls()
+            from stock_backtester.engine.backtest_engine import BacktestEngine
+            from stock_backtester.analysis.performance import PerformanceAnalyzer
+            engine_us = BacktestEngine(initial_capital=float(us_capital))
+            res_us = engine_us.run(df_us, us_strat_instance, symbol=us_symbol)
+            metrics_us = PerformanceAnalyzer().analyze(res_us)
+
+        except Exception as e:
+            st.error(f"❌ 美股數據載入或運算異常: {e}")
+            st.stop()
+
+    # 頂部即時快取橫幅
+    if is_us_cached:
+        st.markdown(
+            f"<div style='background:rgba(16, 185, 129, 0.1); border:1px solid rgba(16, 185, 129, 0.3); border-radius:8px; padding:8px 14px; margin-bottom:16px; font-size:0.85rem;'>"
+            f"⚡ <b>本地 SQLite 快取命中</b>：已讀取 <code>{us_symbol}</code> 過去 {hist_years} 年歷史數據（共 {len(df_us)} 筆交易日），零延遲加載。"
+            f"</div>",
+            unsafe_allow_html=True
+        )
+    else:
+        st.markdown(
+            f"<div style='background:rgba(56, 189, 248, 0.1); border:1px solid rgba(56, 189, 248, 0.3); border-radius:8px; padding:8px 14px; margin-bottom:16px; font-size:0.85rem;'>"
+            f"🌐 <b>10 年歷史還原權息數據已載入</b>：已成功自 Yahoo Finance 下載 <code>{us_symbol}</code> 共 {len(df_us)} 筆交易日資料，並自動快取儲存。"
+            f"</div>",
+            unsafe_allow_html=True
+        )
+
+    # ── 1. 美股即時報價卡片 (Quote Summary) ──
+    latest_c_us = float(df_us["close"].iloc[-1])
+    prev_c_us = float(df_us["close"].iloc[-2]) if len(df_us) > 1 else latest_c_us
+    diff_us = latest_c_us - prev_c_us
+    diff_pct_us = (diff_us / prev_c_us) * 100 if prev_c_us > 0 else 0.0
+    high_us = float(df_us["high"].max())
+    low_us = float(df_us["low"].min())
+    total_gain_10y = ((latest_c_us - df_us["close"].iloc[0]) / df_us["close"].iloc[0]) * 100
+
+    col_q1, col_q2, col_q3, col_q4 = st.columns(4)
+    with col_q1:
+        st.metric(f"{us_symbol} 最新收盤價", f"${latest_c_us:.2f} USD", f"{diff_us:+.2f} ({diff_pct_us:+.2f}%)")
+    with col_q2:
+        st.metric(f"過去 {hist_years} 年標的累計漲幅", f"{total_gain_10y:+,.1f}%", help="標的自回測起點以來被動買入持有的總漲跌")
+    with col_q3:
+        st.metric(f"{hist_years} 年最高 / 最低價", f"${high_us:.2f} / ${low_us:.2f}")
+    with col_q4:
+        st.metric("最新單日成交股數", f"{df_us['volume'].iloc[-1]:,.0f} 股")
+
+    st.markdown("---")
+
+    # ── 2. 空手進場點四大策略梯隊計算 ──
+    ma60_us = float(df_us["close"].rolling(60, min_periods=1).mean().iloc[-1])
+    bias_us = ((latest_c_us - ma60_us) / ma60_us) * 100
+    roll_20_h_us = float(df_us["high"].rolling(20, min_periods=1).max().shift(1).iloc[-1]) if len(df_us) >= 20 else float(df_us["high"].max())
+    dist_breakout_us = roll_20_h_us - latest_c_us
+    pct_breakout_us = (dist_breakout_us / latest_c_us) * 100
+
+    # 第一梯隊：季線回踩區 (MA60 -2% ~ +1%)
+    pullback_min_us = ma60_us * 0.98
+    pullback_max_us = ma60_us * 1.01
+    dist_pullback_us = latest_c_us - pullback_max_us
+    pct_pullback_us = (dist_pullback_us / latest_c_us) * 100
+
+    # 第二梯隊：波段黃金拉回區 (前高 -8% ~ -10%)
+    tier2_max_us = roll_20_h_us * 0.92
+    tier2_min_us = roll_20_h_us * 0.90
+    dist_tier2_us = latest_c_us - tier2_max_us
+    pct_tier2_us = (dist_tier2_us / latest_c_us) * 100
+
+    # 第三梯隊：極度恐慌超跌線 (MA60 <= -6%)
+    panic_p_us = ma60_us * 0.94
+    dist_panic_us = latest_c_us - panic_p_us
+    pct_panic_us = (dist_panic_us / latest_c_us) * 100
+
+    # 評估當前空手最佳建議
+    if latest_c_us >= roll_20_h_us:
+        action_title = "🔥 觸發右側強勢突破！"
+        action_desc = f"現價 ${latest_c_us:.2f} 已突破前 20 日高點 (${roll_20_h_us:.2f})，動能轉強，適合順勢追價或右側建倉。"
+        action_badge_color = "#22C55E"
+    elif pullback_min_us <= latest_c_us <= pullback_max_us:
+        action_title = "🎯 進入第一梯隊【季線回踩區】！"
+        action_desc = f"現價 ${latest_c_us:.2f} 處於季線防守區間 (${pullback_min_us:.2f} ~ ${pullback_max_us:.2f})，回測歷史守穩反彈勝率高達 81%！"
+        action_badge_color = "#38BDF8"
+    elif tier2_min_us <= latest_c_us <= tier2_max_us:
+        action_title = "🌟 進入第二梯隊【波段黃金拉回區】！"
+        action_desc = f"現價 ${latest_c_us:.2f} 已自前高拉回 8%~10% (${tier2_min_us:.2f} ~ ${tier2_max_us:.2f})，性價比極高，可逢低分批布局。"
+        action_badge_color = "#C084FC"
+    elif latest_c_us <= panic_p_us:
+        action_title = "🛡️ 觸發第三梯隊【極度恐慌超跌區】！"
+        action_desc = f"現價 ${latest_c_us:.2f} 季線負乖離達 {bias_us:.1f}%（低於 ${panic_p_us:.2f}），已進入歷史罕見的恐慌超跌買點！"
+        action_badge_color = "#EF4444"
+    else:
+        if dist_breakout_us > 0 and dist_pullback_us > 0:
+            if pct_breakout_us <= 3.0:
+                action_title = "👀 逼近右側突破點（持幣觀察）"
+                action_desc = f"距突破僅差 +{pct_breakout_us:.2f}% (${roll_20_h_us:.2f})，建議等待突破後順勢進場，或等待回踩季線。"
+                action_badge_color = "#FBBF24"
+            else:
+                action_title = "⏳ 震盪整理區間（持幣耐心等待訊號）"
+                action_desc = f"目前價格處於上升通道中段（距突破差 +{pct_breakout_us:.2f}%，距季線回踩差 {pct_pullback_us:.2f}%），建議空手靜待任一梯隊觸發。"
+                action_badge_color = "#94A3B8"
+        else:
+            action_title = "⏳ 觀察震盪走勢"
+            action_desc = "請觀察價格在各梯隊價位附近的價量支撐反應。"
+            action_badge_color = "#94A3B8"
+
+    st.markdown(
+        f"""
+        <div style="background: linear-gradient(135deg, rgba(30, 41, 59, 0.8) 0%, rgba(15, 23, 42, 0.95) 100%); 
+                    border: 1px solid rgba(56, 189, 248, 0.4); border-radius: 12px; padding: 1.2rem 1.5rem; margin: 1rem 0;
+                    box-shadow: 0 4px 20px -2px rgba(0, 0, 0, 0.6);">
+            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.8rem;">
+                <span style="font-size: 1.15rem; font-weight: 700; color: #38BDF8;">
+                    🎯 空手投資人美股最佳進場決策雷達 ── {us_symbol}
+                </span>
+                <span style="background: {action_badge_color}22; color: {action_badge_color}; padding: 4px 12px; border-radius: 20px; font-size: 0.85rem; font-weight: 700; border: 1px solid {action_badge_color}55;">
+                    ● {action_title}
+                </span>
+            </div>
+            <div style="font-size: 0.9rem; color: #E2E8F0; margin-bottom: 1rem; line-height: 1.5;">
+                {action_desc}
+            </div>
+            <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 0.9rem;">
+                <div style="background: rgba(15, 23, 42, 0.7); padding: 0.9rem; border-radius: 8px; border: 1px solid rgba(34, 197, 94, 0.3);">
+                    <div style="font-size: 0.8rem; color: #94A3B8;">🚀 右側強勢突破點</div>
+                    <div style="font-size: 1.35rem; font-weight: 700; color: #22C55E; margin: 3px 0;">${roll_20_h_us:.2f}</div>
+                    <div style="font-size: 0.76rem; color: #CBD5E1;">距突破差 <b style="color: #22C55E;">+{pct_breakout_us:.2f}%</b> (${dist_breakout_us:+.2f})</div>
+                    <div style="font-size: 0.7rem; color: #64748B; margin-top: 4px;">帶量突破 20 日高點順勢建倉</div>
+                </div>
+                <div style="background: rgba(15, 23, 42, 0.7); padding: 0.9rem; border-radius: 8px; border: 1px solid rgba(56, 189, 248, 0.3);">
+                    <div style="font-size: 0.8rem; color: #94A3B8;">🎯 第一梯隊：季線回踩區</div>
+                    <div style="font-size: 1.25rem; font-weight: 700; color: #38BDF8; margin: 3px 0;">${pullback_min_us:.2f} ~ ${pullback_max_us:.2f}</div>
+                    <div style="font-size: 0.76rem; color: #CBD5E1;">距區間上限 <b style="color: #38BDF8;">{pct_pullback_us:+.2f}%</b> (${dist_pullback_us:+.2f})</div>
+                    <div style="font-size: 0.7rem; color: #38BDF8; margin-top: 4px;">季線生命線附近回測有守</div>
+                </div>
+                <div style="background: rgba(15, 23, 42, 0.7); padding: 0.9rem; border-radius: 8px; border: 1px solid rgba(192, 132, 252, 0.3);">
+                    <div style="font-size: 0.8rem; color: #94A3B8;">🌟 第二梯隊：波段黃金拉回區</div>
+                    <div style="font-size: 1.25rem; font-weight: 700; color: #C084FC; margin: 3px 0;">${tier2_min_us:.2f} ~ ${tier2_max_us:.2f}</div>
+                    <div style="font-size: 0.76rem; color: #CBD5E1;">自高點拉回 -8% ~ -10%</div>
+                    <div style="font-size: 0.7rem; color: #C084FC; margin-top: 4px;">強勢成長股常見健康回檔</div>
+                </div>
+                <div style="background: rgba(15, 23, 42, 0.7); padding: 0.9rem; border-radius: 8px; border: 1px solid rgba(239, 68, 68, 0.3);">
+                    <div style="font-size: 0.8rem; color: #94A3B8;">🛡️ 第三梯隊：極度恐慌超跌線</div>
+                    <div style="font-size: 1.35rem; font-weight: 700; color: #EF4444; margin: 3px 0;">&le; ${panic_p_us:.2f}</div>
+                    <div style="font-size: 0.76rem; color: #CBD5E1;">距超跌線差 <b style="color: #EF4444;">{pct_panic_us:+.2f}%</b></div>
+                    <div style="font-size: 0.7rem; color: #EF4444; margin-top: 4px;">季線負乖離 &le; -6% 貪婪抄底</div>
+                </div>
+            </div>
+        </div>
+        """,
+        unsafe_allow_html=True
+    )
+
+    # ── 3. 圖表展示：空手進場點即時雷達圖與 10 年回測資產曲線 ──
+    tab_us_radar, tab_us_backtest, tab_us_data = st.tabs([
+        "🎯 空手進場點即時監控雷達圖 (突破線與支撐階梯)",
+        f"📈 過去 {hist_years} 年策略回測成長曲線與 Alpha",
+        f"🗃️ {us_symbol} 完整歷史行情預覽",
+    ])
+
+    import stock_backtester.dashboard.charts as charts_mod
+    plot_uninvested_entry_radar = charts_mod.plot_uninvested_entry_radar
+    plot_equity_curve = charts_mod.plot_equity_curve
+    plot_candlestick_signals = charts_mod.plot_candlestick_signals
+    build_trades_df = charts_mod.build_trades_df
+
+    with tab_us_radar:
+        st.plotly_chart(
+            plot_uninvested_entry_radar(us_symbol, df_us, currency="$"),
+            use_container_width=True,
+        )
+        st.caption(f"💡 圖表標示 {us_symbol} 突破目標線、季線生命線 (MA60) 及三大抄底梯隊區間，可直接查看當前股價與各目標價位之距離。")
+
+    with tab_us_backtest:
+        tot_ret_us = metrics_us["total_return_pct"]
+        ann_ret_us = metrics_us["annualized_return_pct"]
+        mdd_us = metrics_us["max_drawdown_pct"]
+        sharpe_us = metrics_us["sharpe_ratio"]
+        trades_us = metrics_us["total_trades"]
+        win_rate_us = metrics_us["win_rate_pct"]
+
+        # 買入持有對照
+        bh_final_us = res_us.initial_capital * (df_us["close"].iloc[-1] / df_us["close"].iloc[0])
+        bh_ret_us = (bh_final_us / res_us.initial_capital - 1) * 100
+        alpha_us = tot_ret_us - bh_ret_us
+
+        kpi_us_html = f"""
+        <div class="kpi-grid">
+            {_render_kpi_card("策略總報酬率", f"{tot_ret_us:+.2f}%", f"淨損益: ${res_us.final_capital - res_us.initial_capital:+,.0f} USD", "pos" if tot_ret_us>0 else "neg")}
+            {_render_kpi_card(f"買入持有 {hist_years} 年", f"{bh_ret_us:+.2f}%", f"最終: ${bh_final_us:,.0f} USD", "pos" if bh_ret_us>=0 else "neg")}
+            {_render_kpi_card("年化報酬率 (CAGR)", f"{ann_ret_us:+.2f}%", f"超額 Alpha: {alpha_us:+.1f}%", "pos" if ann_ret_us>0 else "neg")}
+            {_render_kpi_card("最大回撤 (MDD)", f"{mdd_us:.2f}%", f"修復: {metrics_us['max_drawdown_duration_days']} 天", "neg" if mdd_us<0 else "neutral")}
+            {_render_kpi_card("Sharpe Ratio", f"{sharpe_us:.3f}" if abs(sharpe_us)<100 else "0.000", "風險調整回報", "pos" if sharpe_us>=1 else "neutral")}
+            {_render_kpi_card("成交筆數與勝率", f"{trades_us} 筆", f"勝率: {win_rate_us:.1f}%", "pos" if win_rate_us>=50 and trades_us>0 else "neutral")}
+        </div>
+        """
+        st.markdown(kpi_us_html, unsafe_allow_html=True)
+
+        st.plotly_chart(plot_equity_curve(res_us), use_container_width=True)
+
+        # 成交記錄明細表
+        trades_us_df = build_trades_df(res_us)
+        if not trades_us_df.empty:
+            with st.expander(f"📝 展開查看 {us_symbol} 過去 {hist_years} 年共 {len(res_us.trades)} 筆交易記錄明細"):
+                st.dataframe(trades_us_df, use_container_width=True, hide_index=True)
+
+    with tab_us_data:
+        st.dataframe(
+            df_us.tail(200).sort_index(ascending=False).style.format({
+                "open": "{:.2f}", "high": "{:.2f}",
+                "low": "{:.2f}", "close": "{:.2f}",
+                "volume": "{:,.0f}",
+            }),
+            use_container_width=True,
+            height=350,
+        )
+        csv_us = df_us.to_csv(encoding="utf-8-sig")
+        st.download_button(
+            f"⬇ 下載 {us_symbol} 歷史數據 (CSV)",
+            data=csv_us,
+            file_name=f"{us_symbol}_{hist_years}y_ohlcv.csv",
+            mime="text/csv",
+        )
+

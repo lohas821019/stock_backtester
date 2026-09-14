@@ -856,6 +856,7 @@ def plot_uninvested_entry_radar(
     breakout_period: int = 20,
     ma_period: int = 60,
     capitulation_bias: float = -6.0,
+    currency: str = "$",
 ) -> go.Figure:
     """
     專屬獨立圖表：空手等待進場點即時監控雷達圖。
@@ -887,13 +888,15 @@ def plot_uninvested_entry_radar(
     dist_breakout = roll_high - latest_c
     pct_breakout = (dist_breakout / latest_c) * 100.0
 
+    cur_sym = currency
+
     fig = make_subplots(
         rows=2, cols=1,
         shared_xaxes=True,
         vertical_spacing=0.035,
         row_heights=[0.74, 0.26],
         subplot_titles=[
-            f"<b>🎯 {symbol} 空手進場點雷達監控 ── 突破目標線 (${roll_high:.2f}) 與季線生命線 (${latest_ma:.2f})</b>",
+            f"<b>🎯 {symbol} 空手進場點雷達監控 ── 突破目標線 ({cur_sym}{roll_high:.2f}) 與季線生命線 ({cur_sym}{latest_ma:.2f})</b>",
             "<b>📊 成交量 (Volume)</b>",
         ]
     )
@@ -919,7 +922,7 @@ def plot_uninvested_entry_radar(
     fig.add_hline(
         y=roll_high,
         line=dict(color="#22C55E", width=2, dash="dash"),
-        annotation_text=f"🚀 右側強勢突破進場價: ${roll_high:.2f} (距突破 +{pct_breakout:.2f}% / 差 {dist_breakout:+.2f} 元)",
+        annotation_text=f"🚀 右側強勢突破進場價: {cur_sym}{roll_high:.2f} (距突破 +{pct_breakout:.2f}% / 差 {dist_breakout:+.2f})",
         annotation_position="top left",
         annotation_font=dict(color="#22C55E", size=11, family="Inter, sans-serif"),
         row=1, col=1
@@ -932,7 +935,7 @@ def plot_uninvested_entry_radar(
         y0=pullback_low, y1=pullback_high,
         fillcolor="rgba(56, 189, 248, 0.16)",
         line=dict(color="#38BDF8", width=1.2, dash="dot"),
-        annotation_text=f"🎯 第一梯隊：季線回踩抄底區 ${pullback_low:.2f} ~ ${pullback_high:.2f} (季線 -2%~+1% 守穩紅K，勝率 81%)",
+        annotation_text=f"🎯 第一梯隊：季線回踩抄底區 {cur_sym}{pullback_low:.2f} ~ {cur_sym}{pullback_high:.2f} (季線 -2%~+1% 守穩紅K，勝率 81%)",
         annotation_position="top right",
         annotation_font=dict(color="#38BDF8", size=10, family="Inter, sans-serif"),
         row=1, col=1
@@ -945,7 +948,7 @@ def plot_uninvested_entry_radar(
         y0=tier2_low, y1=tier2_high,
         fillcolor="rgba(168, 85, 247, 0.16)",
         line=dict(color="#C084FC", width=1.2, dash="dot"),
-        annotation_text=f"🌟 第二梯隊：波段黃金拉回區 ${tier2_low:.2f} ~ ${tier2_high:.2f} (拉回 -8%~-10% 百元關卡，勝率 77%~93%)",
+        annotation_text=f"🌟 第二梯隊：波段黃金拉回區 {cur_sym}{tier2_low:.2f} ~ {cur_sym}{tier2_high:.2f} (拉回 -8%~-10%，勝率 77%~93%)",
         annotation_position="top right",
         annotation_font=dict(color="#C084FC", size=10, family="Inter, sans-serif"),
         row=1, col=1
@@ -955,7 +958,7 @@ def plot_uninvested_entry_radar(
     fig.add_hline(
         y=capitulation_p,
         line=dict(color="#EF4444", width=1.8, dash="dashdot"),
-        annotation_text=f"🛡️ 第三梯隊：極度恐慌超跌線 <= ${capitulation_p:.2f} (季線 <= {capitulation_bias:.1f}%，勝率 84%，均報酬 +14.2%)",
+        annotation_text=f"🛡️ 第三梯隊：極度恐慌超跌線 <= {cur_sym}{capitulation_p:.2f} (季線 <= {capitulation_bias:.1f}%，勝率 84%，均報酬 +14.2%)",
         annotation_position="bottom left",
         annotation_font=dict(color="#EF4444", size=10, family="Inter, sans-serif"),
         row=1, col=1
