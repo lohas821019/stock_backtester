@@ -330,10 +330,13 @@ div.stButton > button:first-child:hover {
 # ════════════════════════════════════════════════════════════════════════
 
 @st.cache_data(ttl=600, show_spinner=False)
-def _load_data(symbol: str, start: date, end: date, market: str, force_refresh: bool = False) -> tuple[pd.DataFrame, bool]:
+def _load_data(symbol: str, start: date, end: date, market: str, force_refresh: bool = False, cache_version: str = "v2") -> tuple[pd.DataFrame, bool]:
     from stock_backtester.data.data_manager import DataManager
     dm = DataManager()
     df = dm.get_ohlcv(symbol, start, end, market=market, force_refresh=force_refresh)
+    if not df.empty:
+        df = df.dropna(subset=["open", "high", "low", "close"]).copy()
+        df = df[(df["open"] > 0) & (df["close"] > 0)]
     is_cache = getattr(dm, "last_cache_hit", False)
     return df, is_cache
 
@@ -668,7 +671,13 @@ elif page == "🔬 回測分析實驗室":
         force_refresh = st.session_state.custom_force_refresh
 
         st.markdown("")
-        run_btn = st.button("🚀 執行量化回測", use_container_width=True)
+        col_run1, col_run2 = st.columns([3, 1])
+        with col_run1:
+            run_btn = st.button("🚀 執行量化回測", use_container_width=True)
+        with col_run2:
+            if st.button("🔄", help="立即清空快取並重抓最新報價"):
+                st.cache_data.clear()
+                st.rerun()
 
     # ── 主畫面標題 ────────────────────────────────────────────────────
     st.markdown('<div class="hero-title">🔬 量化回測實驗室</div>', unsafe_allow_html=True)

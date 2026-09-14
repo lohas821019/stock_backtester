@@ -117,6 +117,12 @@ class BacktestEngine:
         if data.empty:
             raise ValueError("data 不能為空")
 
+        # 防禦性清洗：確保進入回測引擎之數據不包含任何 NaN 或無效價格列
+        data = data.dropna(subset=["open", "high", "low", "close"]).copy()
+        data = data[(data["open"] > 0) & (data["close"] > 0)]
+        if data.empty:
+            raise ValueError("有效價格資料為空")
+
         signals = strategy.generate_signals(data)
         result = BacktestResult(
             symbol=symbol,

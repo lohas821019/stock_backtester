@@ -66,6 +66,10 @@ class Database:
             else:
                 combined = df
 
+            # 嚴格過濾無效價格列，防止儲存任何 NaN 或非正數價格
+            combined = combined.dropna(subset=["open", "high", "low", "close"])
+            combined = combined[(combined["open"] > 0) & (combined["close"] > 0)]
+
             combined_to_save = combined.copy()
             combined_to_save.index.name = "date"
             combined_to_save = combined_to_save.reset_index()
