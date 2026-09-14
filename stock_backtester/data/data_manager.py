@@ -100,14 +100,22 @@ class DataManager:
 
             # 重新讀取完整快取
             result = self._db.load(cache_key, start, end)
-            return result if result is not None else pd.DataFrame(
+            if result is not None and not result.empty:
+                result = result.dropna(subset=["open", "high", "low", "close"])
+                result = result[(result["close"] > 0) & (result["open"] > 0)]
+                return result
+            return pd.DataFrame(
                 columns=["open", "high", "low", "close", "volume"]
             )
 
         else:
             # 分鐘線：直接使用 yfinance（自動加 .TW 後綴給台股）
             yf_symbol = self._to_yf_symbol(symbol, market)
-            return self._yf.fetch(yf_symbol, start, end, interval)
+            df_min = self._yf.fetch(yf_symbol, start, end, interval)
+            if not df_min.empty:
+                df_min = df_min.dropna(subset=["open", "high", "low", "close"])
+                df_min = df_min[(df_min["close"] > 0) & (df_min["open"] > 0)]
+            return df_min
 
     def _fetch_tw_daily(
         self, symbol: str, start: date, end: date, market: str

@@ -63,6 +63,10 @@ class BaseFetcher(ABC):
         df[required[:4]] = df[required[:4]].astype(float)
         df["volume"] = df["volume"].astype(float)
 
+        # 剔除價格含有 NaN 或非正數之無效行（防止非交易日/假資料污染回測）
+        df = df.dropna(subset=["open", "high", "low", "close"])
+        df = df[(df["open"] > 0) & (df["high"] > 0) & (df["low"] > 0) & (df["close"] > 0)]
+
         if not isinstance(df.index, pd.DatetimeIndex):
             df.index = pd.to_datetime(df.index)
 
