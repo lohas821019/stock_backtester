@@ -30,4 +30,14 @@ jobs:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
         run: |
-          python -m stock_backtester.cli watch-entry --stock 0050 --notify
+          TW_HOUR=$(TZ=Asia/Taipei date +%H)
+          TW_MIN=$(TZ=Asia/Taipei date +%M)
+          echo "當前台灣時間: ${TW_HOUR}:${TW_MIN}"
+          # 若為下午 13:35 之後（收盤時段），發送今日收盤大總結；盤中則維持靜默巡檢（僅觸碰信號時推播）
+          if [ "$TW_HOUR" -eq 13 ] && [ "$TW_MIN" -ge 35 ] || [ "$TW_HOUR" -ge 14 ]; then
+            echo "📊 收盤結算時段：執行收盤總結推播..."
+            python -m stock_backtester.cli watch-entry --stock 0050 --notify --summary
+          else
+            echo "⚡ 盤中交易時段：執行即時觸碰巡檢（未觸發信號時保持靜默）..."
+            python -m stock_backtester.cli watch-entry --stock 0050 --notify
+          fi

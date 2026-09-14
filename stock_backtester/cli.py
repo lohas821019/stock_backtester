@@ -380,9 +380,10 @@ def cmd_scan(ctx, scan_date_str, dry_run):
 @main.command("watch-entry")
 @click.option("--stock", "-s", default="0050", help="股票代號（預設：0050）")
 @click.option("--notify", is_flag=True, default=False, help="若滿足進場條件則發送 Telegram 通知")
+@click.option("--summary", is_flag=True, default=False, help="若無觸發買訊，是否仍發送每日收盤狀態總結（適合收盤後使用）")
 @click.option("--intraday/--no-intraday", default=True, help="是否優先抓取盤中即時報價（預設開啟）")
 @click.pass_context
-def cmd_watch_entry(ctx, stock, notify, intraday):
+def cmd_watch_entry(ctx, stock, notify, summary, intraday):
     """即時監控標的空手進場點雷達（支援盤中即時報價與回踩/突破觸碰偵測）。"""
     from datetime import date, timedelta
     import requests
@@ -545,28 +546,31 @@ def cmd_watch_entry(ctx, stock, notify, intraday):
             else:
                 console.print("[yellow]⚠️ 未設定 Telegram憑證，請在 .env 填入 TELEGRAM_BOT_TOKEN 與 TELEGRAM_CHAT_ID。[/yellow]")
     else:
-        console.print(f"\n[cyan]⏳ 目前持續追蹤中：[/cyan]")
+        console.print(f"\n[cyan]⏳ 目前持續追蹤中（未達進場門檻）：[/cyan]")
         console.print(f"  • 距【右側突破進場價 ${roll_20_h:.2f}】僅差 [bold green]+{pct_breakout:.2f}%[/bold green]")
         console.print(f"  • 距【第一梯隊季線回踩區 ${pullback_min_p:.2f} ~ ${pullback_max_p:.2f}】僅差 [bold cyan]-{pct_pullback:.2f}%[/bold cyan]")
-        if notify:
+        if notify and summary:
             token, chat_id = _load_env_to_os()
             if token and chat_id and token != "your_bot_token_here":
                 notifier = TelegramNotifier(token=token, chat_id=chat_id)
                 quote_url = f"https://tw.stock.yahoo.com/quote/{stock}.TW"
                 status_msg = (
-                    f"🎯 <b>{stock} 空手進場雷達狀態</b>\n\n"
-                    f"📊 <b>最新行情與雷達價位：</b>\n"
-                    f"• 現價：<a href='{quote_url}'><b>{latest_c:.2f} 元</b></a> (季線 {bias:+.2f}%)\n"
-                    f"• 🚀 <b>右側突破點</b>：<a href='{quote_url}'><b>{roll_20_h:.2f} 元</b></a> (差 +{pct_breakout:.2f}%)\n"
-                    f"• 🎯 <b>第一梯隊(季線回踩)</b>：<a href='{quote_url}'><b>{pullback_min_p:.2f} ~ {pullback_max_p:.2f} 元</b></a> (差 -{pct_pullback:.2f}%)\n"
-                    f"• 🌟 <b>第二梯隊(波段黃金)</b>：<a href='{quote_url}'><b>{tier2_min_p:.2f} ~ {tier2_max_p:.2f} 元</b></a> (距高點 -8%~-10%)\n"
+                    f"🏁 <b>【{stock} 今日收盤雷達總結】</b>\n\n"
+                    f"📊 <b>收盤行情與雷達價位 ({latest_dt})：</b>\n"
+                    f"• 今日收盤價：<a href='{quote_url}'><b>{latest_c:.2f} 元</b></a> (季線 {bias:+.2f}%)\n"
+                    f"• 盤中高低：最高 {latest_h:.2f} 元 / 最低 {latest_l:.2f} 元\n"
+                    f"• 🚀 <b>右側強勢突破點</b>：<a href='{quote_url}'><b>{roll_20_h:.2f} 元</b></a> (差 +{pct_breakout:.2f}%)\n"
+                    f"• 🎯 <b>第一梯隊(季線回踩)</b>：<a href='{quote_url}'><b>{pullback_min_p:.2f} ~ {pullback_max_p:.2f} 元</b></a> (差 {dist_pullback:.2f} 元)\n"
+                    f"• 🌟 <b>第二梯隊(波段黃金)</b>：<a href='{quote_url}'><b>{tier2_min_p:.2f} ~ {tier2_max_p:.2f} 元</b></a>\n"
                     f"• 🛡️ <b>第三梯隊(恐慌超跌)</b>：≤ <a href='{quote_url}'><b>{capitulation_p:.2f} 元</b></a> (季線負乖離 ≤ -6%)\n\n"
-                    f"⏳ <b>目前狀態</b>：實時監控中，滿足條件即刻推播！"
+                    f"☕ <b>總結狀態</b>：今日未達進場門檻，維持空手觀望。明日開盤將繼續實時盯盤！"
                 )
                 if notifier.send(status_msg):
-                    console.print("[green]✅ 已發送 Telegram 雷達狀態推播！[/green]")
+                    console.print("[green]✅ 已發送 Telegram 今日收盤總結推播！[/green]")
             else:
                 console.print("[dim]提示：加上 Telegram 通知可在 .env 設定憑證。[/dim]")
+        elif notify and not summary:
+            console.print("[dim]💡 盤中巡檢模式：未觸發進場訊號，保持靜默不打擾。[/dim]")
 
 
 if __name__ == "__main__":
