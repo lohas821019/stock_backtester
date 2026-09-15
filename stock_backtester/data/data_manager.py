@@ -64,8 +64,10 @@ class DataManager:
         """
         取得 OHLCV 資料（含本地快取與自動除權息還原）。
         """
+        from datetime import timedelta
         cache_key = f"{symbol}_{interval}"
         self.last_cache_hit = False
+        today = date.today()
 
         if interval == "1d":
             if not force_refresh:
@@ -74,10 +76,18 @@ class DataManager:
                 if cached is not None and not cached.empty:
                     missing_ranges = self._find_missing_ranges(cached, start, end)
                     if not missing_ranges:
-                        logger.info("[DataManager] ⚡ 快取命中: %s (%s ~ %s) 共 %d 筆，無需重複下載", 
-                                    symbol, start, end, len(cached))
-                        self.last_cache_hit = True
-                        return cached
+                        # 若 end 是今天，額外補抓最近 7 天確保收盤價最新
+                        if end >= today:
+                            tail_start = max(start, today - timedelta(days=7))
+                            logger.info("[DataManager] 📡 補抓最近 7 天尾端資料確保今日收盤: %s", symbol)
+                            tail_df = self._fetch_tw_daily(symbol, tail_start, end, market)
+                            if not tail_df.empty:
+                                self._db.save(cache_key, tail_df)
+                        else:
+                            logger.info("[DataManager] ⚡ 快取命中: %s (%s ~ %s) 共 %d 筆，無需重複下載",
+                                        symbol, start, end, len(cached))
+                            self.last_cache_hit = True
+                            return cached
                 else:
                     missing_ranges = [(start, end)]
             else:
@@ -87,7 +97,7 @@ class DataManager:
             # 補充缺失資料（增量下載）
             new_frames = []
             for miss_start, miss_end in missing_ranges:
-                logger.info("[DataManager] 🌐 下載還原權息資料 %s (%s ~ %s)...", 
+                logger.info("[DataManager] 🌐 下載還原權息資料 %s (%s ~ %s)...",
                             symbol, miss_start, miss_end)
                 fetched = self._fetch_tw_daily(symbol, miss_start, miss_end, market)
                 if not fetched.empty:

@@ -369,7 +369,7 @@ div.stButton > button:first-child:hover {
 # 快取與回測核心函式
 # ════════════════════════════════════════════════════════════════════════
 
-@st.cache_data(ttl=600, show_spinner=False)
+@st.cache_data(ttl=60, show_spinner=False)  # 60 秒後自動刷新，確保盤後資料即時更新
 def _load_data(symbol: str, start: date, end: date, market: str, force_refresh: bool = False, cache_version: str = "v2") -> tuple[pd.DataFrame, bool]:
     from stock_backtester.data.data_manager import DataManager
     dm = DataManager()
