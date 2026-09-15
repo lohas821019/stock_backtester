@@ -1598,9 +1598,10 @@ elif page == "🇺🇸 美股量化監控與進場雷達":
         unsafe_allow_html=True
     )
 
-    # ── 3. 圖表展示：空手進場點即時雷達圖與 10 年回測資產曲線 ──
-    tab_us_radar, tab_us_backtest, tab_us_data = st.tabs([
+    # ── 3. 圖表展示：空手進場點即時雷達圖、多維 K 線與 10 年回測資產曲線 ──
+    tab_us_radar, tab_us_kline, tab_us_backtest, tab_us_data = st.tabs([
         "🎯 空手進場點即時監控雷達圖 (突破線與支撐階梯)",
+        "🕯️ 策略回測多週期 K 線圖 (含 MA / KD / RSI 訊號)",
         f"📈 過去 {hist_years} 年策略回測成長曲線與 Alpha",
         f"🗃️ {us_symbol} 完整歷史行情預覽",
     ])
@@ -1616,7 +1617,22 @@ elif page == "🇺🇸 美股量化監控與進場雷達":
             plot_uninvested_entry_radar(us_symbol, df_us, currency="$"),
             use_container_width=True,
         )
-        st.caption(f"💡 圖表標示 {us_symbol} 突破目標線、季線生命線 (MA60) 及三大抄底梯隊區間，可直接查看當前股價與各目標價位之距離。")
+        st.caption(f"💡 圖表預設聚焦 {us_symbol} 最新 120 根 K 棒（約半年），左側價格軸已啟用自動自適應貼合；標示突破目標線、季線生命線 (MA60) 及三大抄底梯隊區間。")
+
+    with tab_us_kline:
+        # 預設聚焦最新 120 根 K 棒，左側價格軸與底部滑桿全面自適應
+        n_us_bars = len(df_us)
+        vis_us_range = (df_us.index[-min(120, n_us_bars)], df_us.index[-1]) if n_us_bars > 0 else None
+        st.plotly_chart(
+            plot_candlestick_signals(
+                res_us,
+                timeframe="☀️ 日線 (1D)",
+                visible_range=vis_us_range,
+                show_rangeslider=True,
+            ),
+            use_container_width=True,
+        )
+        st.caption(f"💡 預設聚焦 {us_symbol} 最新 120 根日 K 線（約半年），左側價格軸與指標副圖均自動動態貼合；底部滑動條支援自由縮放與回溯全歷史。")
 
     with tab_us_backtest:
         tot_ret_us = metrics_us["total_return_pct"]

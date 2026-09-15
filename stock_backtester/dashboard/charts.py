@@ -975,9 +975,31 @@ def plot_uninvested_entry_radar(
 
     fig = _apply_pro_layout(fig, f"🎯 {symbol} 空手進場點即時雷達圖", height=650)
     fig.update_xaxes(rangeslider=dict(visible=False))
-    if len(df) >= 120:
-        pad = (df.index[-1] - df.index[-120]) / 120 * 0.85
-        fig.update_xaxes(range=[df.index[-120] - pad, df.index[-1] + pad])
+
+    # 預設聚焦最新 120 根 K 線，並動態自適應左側價格軸 (Y-axis)，徹底避免全歷史區間過大造成 K 線扁平或變形
+    n_visible = min(len(df), 120)
+    if n_visible > 0:
+        vis_df = df.iloc[-n_visible:]
+        pad_x = (vis_df.index[-1] - vis_df.index[0]) / max(1, n_visible - 1) * 0.85
+        fig.update_xaxes(range=[vis_df.index[0] - pad_x, vis_df.index[-1] + pad_x])
+
+        # 動態計算可視 120 根 K 線內的價格極值 (包含 K 線、MA60 均線、突破目標線與抄底支撐線)
+        vis_ma = ma.iloc[-n_visible:]
+        p_lows = [vis_df["low"].min(), vis_ma.min(), capitulation_p]
+        p_highs = [vis_df["high"].max(), vis_ma.max(), roll_high]
+        
+        vis_min_p = float(min(p_lows))
+        vis_max_p = float(max(p_highs))
+        p_margin = (vis_max_p - vis_min_p) * 0.06 if vis_max_p > vis_min_p else 1.0
+
+        # 左側價格軸 (Row 1) 緊密自適應貼合
+        fig.update_yaxes(range=[vis_min_p - p_margin, vis_max_p + p_margin], row=1, col=1)
+
+        # 成交量軸 (Row 2) 動態貼合可視範圍最大量
+        vis_max_vol = float(vis_df["volume"].max())
+        if vis_max_vol > 0:
+            fig.update_yaxes(range=[0, vis_max_vol * 1.25], row=2, col=1)
+
     return fig
 
 
