@@ -52,7 +52,8 @@ class Database:
         df_to_save = df.copy()
         df_to_save.index.name = "date"
         df_to_save = df_to_save.reset_index()
-        df_to_save["date"] = df_to_save["date"].astype(str)
+        # 只保留 YYYY-MM-DD，避免時區轉換導致跨日錯位（yfinance 回傳 +08:00 轉 UTC 會變前一天）
+        df_to_save["date"] = pd.to_datetime(df_to_save["date"]).dt.strftime("%Y-%m-%d")
 
         with self._engine.begin() as conn:
             # 使用 pandas to_sql replace 模式（若資料量小可接受）
@@ -73,7 +74,8 @@ class Database:
             combined_to_save = combined.copy()
             combined_to_save.index.name = "date"
             combined_to_save = combined_to_save.reset_index()
-            combined_to_save["date"] = combined_to_save["date"].astype(str)
+            # 同樣只存 YYYY-MM-DD
+            combined_to_save["date"] = pd.to_datetime(combined_to_save["date"]).dt.strftime("%Y-%m-%d")
             combined_to_save.to_sql(table, conn, if_exists="replace", index=False)
 
         logger.debug("[Database] 已儲存 %d 筆資料到 %s", len(df), table)
@@ -119,9 +121,8 @@ class Database:
                 if df.empty:
                     return None
 
-                # 統一使用 format="mixed" 並移除時區偏差，確保相容所有資料來源
-                parsed_dates = pd.to_datetime(df["date"], format="mixed", utc=True).dt.tz_localize(None)
-                df["date"] = parsed_dates
+                # 直接解析 YYYY-MM-DD，不做時區轉換，避免 UTC 偏移造成跨日錯位
+                df["date"] = pd.to_datetime(df["date"].str[:10])
                 df = df.set_index("date")
                 df.index = pd.DatetimeIndex(df.index)
                 return df.sort_index()
@@ -129,6 +130,7 @@ class Database:
         except Exception as e:
             logger.warning("[Database] 讀取失敗 %s: %s", table, e)
             return None
+
 
     def list_cached(self) -> list[str]:
         """列出所有已快取的 cache_key。"""
