@@ -185,10 +185,11 @@ class DataManager:
         cached_start = cached_dates.min()
         cached_end = cached_dates.max()
 
-        # 容忍 <= 4 天的假日邊界（例如 1/1 元旦連假或跨週末），避免重複下載非交易日
+        # 前端容忍 <= 4 天（假日邊界），後端只要差 >= 1 天就補抓新資料
+        # 注意：Streamlit 的 @cache_data(ttl=600) 已防止 10 分鐘內重複呼叫
         if start < cached_start and (cached_start - start).days > 4:
             missing.append((start, cached_start))
-        if end > cached_end and (end - cached_end).days > 3:
+        if end > cached_end and (end - cached_end).days >= 1:
             missing.append((cached_end, end))
 
         return missing
