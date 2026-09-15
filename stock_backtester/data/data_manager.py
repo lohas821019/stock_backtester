@@ -87,7 +87,7 @@ class DataManager:
                             logger.info("[DataManager] ⚡ 快取命中: %s (%s ~ %s) 共 %d 筆，無需重複下載",
                                         symbol, start, end, len(cached))
                             self.last_cache_hit = True
-                            return cached
+                            return self._adjust_0052(symbol, cached, cache_key)
                 else:
                     missing_ranges = [(start, end)]
             else:
@@ -113,7 +113,7 @@ class DataManager:
             if result is not None and not result.empty:
                 result = result.dropna(subset=["open", "high", "low", "close"])
                 result = result[(result["close"] > 0) & (result["open"] > 0)]
-                return result
+                return self._adjust_0052(symbol, result, cache_key)
             return pd.DataFrame(
                 columns=["open", "high", "low", "close", "volume"]
             )
@@ -126,6 +126,22 @@ class DataManager:
                 df_min = df_min.dropna(subset=["open", "high", "low", "close"])
                 df_min = df_min[(df_min["close"] > 0) & (df_min["open"] > 0)]
             return df_min
+
+    def _adjust_0052(self, symbol: str, df: pd.DataFrame, cache_key: str | None = None) -> pd.DataFrame:
+        """0052 富邦科技於 2025/11/17 進行 1 拆 7 股票分割之自動還原防護。"""
+        if symbol == "0052" and df is not None and not df.empty:
+            split_cutoff = pd.Timestamp("2025-11-17")
+            if getattr(df.index, "tz", None) is not None:
+                split_cutoff = split_cutoff.tz_localize(df.index.tz)
+            mask = df.index < split_cutoff
+            if mask.any() and df.loc[mask, "close"].max() > 100:
+                logger.info("[DataManager] 🛡️ 執行 0052 歷史資料 1 拆 7 股票分割自動除權息還原")
+                df = df.copy()
+                df.loc[mask, ["open", "high", "low", "close"]] /= 7.0
+                df.loc[mask, "volume"] *= 7.0
+                if cache_key:
+                    self._db.save(cache_key, df)
+        return df
 
     def _fetch_tw_daily(
         self, symbol: str, start: date, end: date, market: str
@@ -143,7 +159,7 @@ class DataManager:
                 logger.info("[DataManager] 優先使用 yfinance 抓取還原權息股價: %s", yf_symbol)
                 df = self._yf.fetch(yf_symbol, start, end)
                 if not df.empty:
-                    return df
+                    return self._adjust_0052(symbol, df)
             except Exception as e:
                 logger.warning("[DataManager] yfinance 抓取失敗，嘗試官方 TWSE/TPEX: %s", e)
 
@@ -152,7 +168,7 @@ class DataManager:
                 try:
                     df = self._twse.fetch(symbol, start, end)
                     if not df.empty:
-                        return df
+                        return self._adjust_0052(symbol, df)
                 except Exception as e:
                     logger.warning("[DataManager] TWSE 失敗: %s", e)
 
@@ -160,7 +176,7 @@ class DataManager:
                 try:
                     df = self._tpex.fetch(symbol, start, end)
                     if not df.empty:
-                        return df
+                        return self._adjust_0052(symbol, df)
                 except Exception as e:
                     logger.warning("[DataManager] TPEX 失敗: %s", e)
 

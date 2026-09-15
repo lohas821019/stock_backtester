@@ -8,9 +8,10 @@
 - Dashboard 下拉快速選單
 """
 
-# 元大台灣 50 ETF 本身與全部 50 檔成分股
+# 核心指數與權值龍頭清單（含 0050、0052 及成分股）
 TAIWAN_50_STOCKS: list[dict[str, str]] = [
     {"symbol": "0050", "name": "元大台灣50 ETF"},
+    {"symbol": "0052", "name": "富邦科技 ETF (科技半導體龍頭)"},
     {"symbol": "2330", "name": "台積電"},
     {"symbol": "2317", "name": "鴻海"},
     {"symbol": "2454", "name": "聯發科"},
