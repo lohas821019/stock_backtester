@@ -18,6 +18,19 @@ import numpy as np
 ROOT = Path(__file__).parent.parent.parent
 sys.path.insert(0, str(ROOT))
 
+# ── 預載入本地模組（確保 Streamlit Cloud 路徑正確）────────────────────
+try:
+    from stock_backtester.data.constituents import (
+        US_POPULAR_STOCKS,
+        get_us_popular_options,
+    )
+    _us_import_ok = True
+except Exception as _us_import_err:
+    US_POPULAR_STOCKS = []
+    def get_us_popular_options():  # type: ignore[misc]
+        return []
+    _us_import_ok = False
+
 # ── 頁面設定（必須是第一個 st 呼叫）─────────────────────────────────
 st.set_page_config(
     page_title="Stock Backtester Pro",
@@ -1313,7 +1326,6 @@ elif page == "🇺🇸 美股量化監控與進場雷達":
     st.markdown('<div class="hero-title">🇺🇸 美股量化監控與進場雷達</div>', unsafe_allow_html=True)
     st.markdown('<div class="hero-sub">抓取過去 10 年美股真實還原歷史行情，透過高勝率量化策略模型即時計算空手最佳進場梯隊與右側突破點。</div>', unsafe_allow_html=True)
 
-    from stock_backtester.data.constituents import US_POPULAR_STOCKS, get_us_popular_options
     from stock_backtester.strategies import list_strategies, get_strategy
 
     with st.sidebar:
