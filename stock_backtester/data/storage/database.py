@@ -34,8 +34,24 @@ class Database:
         logger.info("[Database] 使用資料庫: %s", self._path)
 
     def _table_name(self, cache_key: str) -> str:
-        """將 cache_key 轉換為合法的 table 名稱。"""
-        return "ohlcv_" + cache_key.replace(".", "_").replace("-", "_").lower()
+        """將 cache_key 轉換為合法的 table 名稱（含 v4 版本號，自動淘汰雲端舊快取）。"""
+        return "ohlcv_v4_" + cache_key.replace(".", "_").replace("-", "_").lower()
+
+    @staticmethod
+    def _normalize_df(df: pd.DataFrame) -> pd.DataFrame:
+        """統一將 DataFrame index 正規化為乾淨的無時區 DatetimeIndex (以台北時間為基準日)。"""
+        if df.empty:
+            return df
+        df = df.copy()
+        if hasattr(df.index, "tz") and df.index.tz is not None:
+            norm_idx = df.index.tz_convert("Asia/Taipei").tz_localize(None).normalize()
+        else:
+            norm_idx = pd.to_datetime(df.index).normalize()
+        df.index = norm_idx
+        df.index.name = "date"
+        df = df.dropna(subset=["open", "high", "low", "close"])
+        df = df[(df["open"] > 0) & (df["close"] > 0)]
+        return df
 
     def save(self, cache_key: str, df: pd.DataFrame) -> None:
         """
@@ -49,44 +65,23 @@ class Database:
             return
 
         table = self._table_name(cache_key)
-        df_to_save = df.copy()
-        df_to_save.index.name = "date"
-        df_to_save = df_to_save.reset_index()
-        # 只保留 YYYY-MM-DD，避免時區轉換導致跨日錯位（yfinance 回傳 +08:00 轉 UTC 會變前一天）
-        df_to_save["date"] = (
-            pd.to_datetime(df_to_save["date"], utc=True)
-            .dt.tz_convert("Asia/Taipei")
-            .dt.strftime("%Y-%m-%d")
-        )
+        df_norm = self._normalize_df(df)
 
         with self._engine.begin() as conn:
-            # 使用 pandas to_sql replace 模式（若資料量小可接受）
-            # 生產環境應改用 UPSERT
             existing = self._load_raw(cache_key)
             if existing is not None and not existing.empty:
-                combined = pd.concat([existing, df]).drop_duplicates(
-                    subset=None, keep="last"
-                )
-                combined = combined[~combined.index.duplicated(keep="last")]
+                existing_norm = self._normalize_df(existing)
+                combined = pd.concat([existing_norm, df_norm])
+                # 以日期為唯一索引去重，保留最新資料並按時間升冪排序
+                combined = combined[~combined.index.duplicated(keep="last")].sort_index()
             else:
-                combined = df
+                combined = df_norm
 
-            # 嚴格過濾無效價格列，防止儲存任何 NaN 或非正數價格
-            combined = combined.dropna(subset=["open", "high", "low", "close"])
-            combined = combined[(combined["open"] > 0) & (combined["close"] > 0)]
-
-            combined_to_save = combined.copy()
-            combined_to_save.index.name = "date"
-            combined_to_save = combined_to_save.reset_index()
-            # 統一轉成 YYYY-MM-DD 字串：先取日期部分再格式化，相容 Timestamp / tz-aware / 純字串
-            combined_to_save["date"] = (
-                pd.to_datetime(combined_to_save["date"], utc=True)
-                .dt.tz_convert("Asia/Taipei")
-                .dt.strftime("%Y-%m-%d")
-            )
+            combined_to_save = combined.copy().reset_index()
+            combined_to_save["date"] = combined_to_save["date"].dt.strftime("%Y-%m-%d")
             combined_to_save.to_sql(table, conn, if_exists="replace", index=False)
 
-        logger.debug("[Database] 已儲存 %d 筆資料到 %s", len(df), table)
+        logger.debug("[Database] 已儲存 %d 筆資料到 %s", len(combined), table)
 
     def load(
         self, cache_key: str, start: date | None = None, end: date | None = None
@@ -129,26 +124,25 @@ class Database:
                 if df.empty:
                     return None
 
-                # 直接解析 YYYY-MM-DD，不做時區轉換，避免 UTC 偏移造成跨日錯位
+                # 直接解析 YYYY-MM-DD，正規化為乾淨的 DatetimeIndex
                 df["date"] = pd.to_datetime(df["date"].str[:10])
                 df = df.set_index("date")
-                df.index = pd.DatetimeIndex(df.index)
+                df.index = pd.DatetimeIndex(df.index).normalize()
                 return df.sort_index()
 
         except Exception as e:
             logger.warning("[Database] 讀取失敗 %s: %s", table, e)
             return None
 
-
     def list_cached(self) -> list[str]:
         """列出所有已快取的 cache_key。"""
         try:
             with self._engine.connect() as conn:
                 result = conn.execute(
-                    text("SELECT name FROM sqlite_master WHERE type='table' AND name LIKE 'ohlcv_%'")
+                    text("SELECT name FROM sqlite_master WHERE type='table' AND name LIKE 'ohlcv_v4_%'")
                 )
                 return [
-                    row[0].replace("ohlcv_", "", 1) for row in result.fetchall()
+                    row[0].replace("ohlcv_v4_", "", 1) for row in result.fetchall()
                 ]
         except Exception:
             return []

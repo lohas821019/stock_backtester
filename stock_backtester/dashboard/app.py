@@ -715,8 +715,9 @@ elif page == "🔬 回測分析實驗室":
         with col_run1:
             run_btn = st.button("🚀 執行量化回測", use_container_width=True)
         with col_run2:
-            if st.button("🔄", help="立即清空快取並重抓最新報價"):
+            if st.button("🔄", help="立即清空所有快取並自網路重新下載最新即時報價"):
                 st.cache_data.clear()
+                st.session_state["trigger_force_refresh_once"] = True
                 st.rerun()
 
     # ── 主畫面標題 ────────────────────────────────────────────────────
@@ -727,6 +728,11 @@ elif page == "🔬 回測分析實驗室":
     if not symbol:
         st.warning("⚠️ 請於左側面板輸入欲回測之股票代號（例如 0050、2330）。")
         st.stop()
+
+    # 若由 🔄 按鈕觸發，則啟用強制重新下載
+    if st.session_state.pop("trigger_force_refresh_once", False):
+        force_refresh = True
+
     with st.spinner(f"正在載入 {symbol} 還原資料並執行「{selected_strategy}」策略運算..."):
         try:
             if force_refresh:
@@ -744,17 +750,19 @@ elif page == "🔬 回測分析實驗室":
             st.stop()
 
     # ── 資料快取狀態橫幅 ──────────────────────────────────────────────
+    df_d_start = df.index[0].strftime("%Y-%m-%d")
+    df_d_end = df.index[-1].strftime("%Y-%m-%d")
     if is_cache:
         st.markdown(
             f"<div style='background:rgba(16, 185, 129, 0.1); border:1px solid rgba(16, 185, 129, 0.3); border-radius:8px; padding:8px 14px; margin-bottom:16px; font-size:0.85rem;'>"
-            f"⚡ <b>本地 SQLite 快取命中</b>：已自本地數據庫零延遲讀取 <code>{symbol}</code>（共 {len(df)} 筆日線資料），無須重複發送網路請求。"
+            f"⚡ <b>本地 SQLite 快取命中</b>：已讀取 <code>{symbol}</code> 行情數據（<b>{df_d_start} ～ {df_d_end}</b>，共 {len(df)} 筆日線資料），零延遲加載。"
             f"</div>",
             unsafe_allow_html=True
         )
     else:
         st.markdown(
             f"<div style='background:rgba(56, 189, 248, 0.1); border:1px solid rgba(56, 189, 248, 0.3); border-radius:8px; padding:8px 14px; margin-bottom:16px; font-size:0.85rem;'>"
-            f"🌐 <b>還原權息資料已下載</b>：已自網路取得 <code>{symbol}</code> 最新除權息還原行情，並永久儲存至本地 SQLite 快取庫。"
+            f"🌐 <b>最新行情已自網路下載</b>：已取得 <code>{symbol}</code> 最新除權息還原行情（<b>{df_d_start} ～ {df_d_end}</b>，共 {len(df)} 筆日線資料），並儲存至本地資料庫。"
             f"</div>",
             unsafe_allow_html=True
         )
@@ -1438,17 +1446,19 @@ elif page == "🇺🇸 美股量化監控與進場雷達":
             st.stop()
 
     # 頂部即時快取橫幅
+    df_us_start = df_us.index[0].strftime("%Y-%m-%d")
+    df_us_end = df_us.index[-1].strftime("%Y-%m-%d")
     if is_us_cached:
         st.markdown(
             f"<div style='background:rgba(16, 185, 129, 0.1); border:1px solid rgba(16, 185, 129, 0.3); border-radius:8px; padding:8px 14px; margin-bottom:16px; font-size:0.85rem;'>"
-            f"⚡ <b>本地 SQLite 快取命中</b>：已讀取 <code>{us_symbol}</code> 過去 {hist_years} 年歷史數據（共 {len(df_us)} 筆交易日），零延遲加載。"
+            f"⚡ <b>本地 SQLite 快取命中</b>：已讀取 <code>{us_symbol}</code> 過去 {hist_years} 年歷史數據（<b>{df_us_start} ～ {df_us_end}</b>，共 {len(df_us)} 筆交易日），零延遲加載。"
             f"</div>",
             unsafe_allow_html=True
         )
     else:
         st.markdown(
             f"<div style='background:rgba(56, 189, 248, 0.1); border:1px solid rgba(56, 189, 248, 0.3); border-radius:8px; padding:8px 14px; margin-bottom:16px; font-size:0.85rem;'>"
-            f"🌐 <b>10 年歷史還原權息數據已載入</b>：已成功自 Yahoo Finance 下載 <code>{us_symbol}</code> 共 {len(df_us)} 筆交易日資料，並自動快取儲存。"
+            f"🌐 <b>10 年歷史還原權息數據已載入</b>：已成功自 Yahoo Finance 下載 <code>{us_symbol}</code> 共 {len(df_us)} 筆交易日資料（<b>{df_us_start} ～ {df_us_end}</b>），並自動快取儲存。"
             f"</div>",
             unsafe_allow_html=True
         )
