@@ -604,8 +604,8 @@ elif page == "🔬 回測分析實驗室":
         today_d = date.today()
         if "custom_date_start" not in st.session_state:
             st.session_state["custom_date_start"] = date(2026, 1, 1)
-        if "custom_date_end" not in st.session_state:
-            st.session_state["custom_date_end"] = today_d
+        # 每次都強制更新結束日期為今天，避免 session 殘留舊日期導致資料停在過去
+        st.session_state["custom_date_end"] = today_d
         if "custom_market" not in st.session_state:
             st.session_state.custom_market = "auto"
         if "custom_force_refresh" not in st.session_state:
