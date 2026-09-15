@@ -416,6 +416,193 @@ def _render_kpi_card(label: str, value: str, sub: str = "", status: str = "neutr
     """
 
 
+def inject_kline_dynamic_scaler():
+    """
+    注入全域 K 線價格軸即時動態自適應縮放腳本 (Dynamic Y-axis Auto-Scaler)。
+    針對全頁面所有 Candlestick 圖表，建立持續性的事件監聽與 MutationObserver：
+    當使用者用滑鼠平移 (Pan)、拖曳底部時間軸 (RangeSlider) 或滾輪縮放時，
+    即時計算當前可視時間窗口內的 K 線最高價/最低價與均線值，
+    動態調適 yaxis.range，解決價格縱軸固定不動、向前拖曳看不見股價或圖表扁平縮小的問題。
+    """
+    components.html(
+        """
+        <script>
+        (function() {
+            let parentDoc = null;
+            try {
+                parentDoc = window.parent.document;
+            } catch (e) {
+                return;
+            }
+            if (!parentDoc) return;
+
+            function parseTime(val) {
+                if (val == null) return NaN;
+                if (typeof val === 'number') return val;
+                if (val instanceof Date) return val.getTime();
+                if (typeof val === 'string') {
+                    let t = Date.parse(val);
+                    if (!isNaN(t)) return t;
+                    t = Date.parse(val.replace(' ', 'T'));
+                    if (!isNaN(t)) return t;
+                }
+                return NaN;
+            }
+
+            function rescalePlot(plot, x0, x1) {
+                if (plot.__isRelayouting) return;
+
+                const fd = plot._fullData || plot.data;
+                if (!fd || fd.length === 0) return;
+
+                const candTrace = fd.find(t => t.type === 'candlestick');
+                if (!candTrace || !candTrace.x || candTrace.x.length === 0) return;
+
+                let t0 = parseTime(x0);
+                let t1 = parseTime(x1);
+                if (isNaN(t0) || isNaN(t1)) return;
+                if (t0 > t1) { const tmp = t0; t0 = t1; t1 = tmp; }
+
+                const priceTraces = fd.filter(t => !t.yaxis || t.yaxis === 'y');
+                let minY = Infinity, maxY = -Infinity;
+
+                for (const t of priceTraces) {
+                    if (!t.x) continue;
+                    const len = t.x.length;
+                    for (let i = 0; i < len; i++) {
+                        const time = parseTime(t.x[i]);
+                        if (time >= t0 && time <= t1) {
+                            if (t.type === 'candlestick') {
+                                if (t.low && t.low[i] != null && !isNaN(t.low[i]) && t.low[i] < minY) minY = t.low[i];
+                                if (t.high && t.high[i] != null && !isNaN(t.high[i]) && t.high[i] > maxY) maxY = t.high[i];
+                            } else if (t.y && t.y[i] != null && !isNaN(t.y[i])) {
+                                if (t.y[i] < minY) minY = t.y[i];
+                                if (t.y[i] > maxY) maxY = t.y[i];
+                            }
+                        }
+                    }
+                }
+
+                if (minY === Infinity || maxY === -Infinity || minY >= maxY) return;
+
+                // 8% 垂直緩衝留白，避免燭芯被裁切
+                const pad = (maxY - minY) * 0.08;
+                const newYRange = [Math.max(0, minY - pad), maxY + pad];
+
+                // 可視區間成交量副圖自適應 (Row 2: yaxis === 'y2')
+                let maxVol = 0;
+                const volTraces = fd.filter(t => t.type === 'bar' && (t.yaxis === 'y2' || (!t.yaxis && fd.length <= 2)));
+                for (const t of volTraces) {
+                    if (!t.x || !t.y) continue;
+                    for (let i = 0; i < t.x.length; i++) {
+                        const time = parseTime(t.x[i]);
+                        if (time >= t0 && time <= t1) {
+                            if (t.y[i] > maxVol) maxVol = t.y[i];
+                        }
+                    }
+                }
+
+                const relayoutUpdate = {
+                    'yaxis.range': newYRange,
+                    'yaxis.autorange': false
+                };
+                if (maxVol > 0) {
+                    relayoutUpdate['yaxis2.range'] = [0, maxVol * 1.18];
+                    relayoutUpdate['yaxis2.autorange'] = false;
+                }
+
+                plot.__isRelayouting = true;
+                const Plotly = window.parent.Plotly || window.Plotly;
+                if (Plotly && typeof Plotly.relayout === 'function') {
+                    Plotly.relayout(plot, relayoutUpdate).then(() => {
+                        plot.__isRelayouting = false;
+                    }).catch(() => {
+                        plot.__isRelayouting = false;
+                    });
+                } else {
+                    plot.__isRelayouting = false;
+                }
+            }
+
+            function attachPlot(plot) {
+                if (!plot || !plot._fullData || plot._fullData.length === 0) return false;
+                const cand = plot._fullData.find(t => t.type === 'candlestick');
+                if (!cand) return false;
+
+                if (plot.__kline_scaler_ready && plot.__kline_scaler_data === plot._fullData) {
+                    return true;
+                }
+
+                plot.__kline_scaler_ready = true;
+                plot.__kline_scaler_data = plot._fullData;
+                const handlerId = Math.random().toString(36).substring(2);
+                plot.__kline_scaler_id = handlerId;
+
+                plot.on('plotly_relayout', function(ed) {
+                    if (plot.__isRelayouting) return;
+                    if (plot.__kline_scaler_id !== handlerId) return;
+
+                    let x0 = ed['xaxis.range[0]'] || (ed['xaxis.range'] && ed['xaxis.range'][0]) ||
+                             ed['xaxis2.range[0]'] || (ed['xaxis2.range'] && ed['xaxis2.range'][0]) ||
+                             ed['xaxis3.range[0]'] || (ed['xaxis3.range'] && ed['xaxis3.range'][0]) ||
+                             ed['xaxis4.range[0]'] || (ed['xaxis4.range'] && ed['xaxis4.range'][0]);
+                    let x1 = ed['xaxis.range[1]'] || (ed['xaxis.range'] && ed['xaxis.range'][1]) ||
+                             ed['xaxis2.range[1]'] || (ed['xaxis2.range'] && ed['xaxis2.range'][1]) ||
+                             ed['xaxis3.range[1]'] || (ed['xaxis3.range'] && ed['xaxis3.range'][1]) ||
+                             ed['xaxis4.range[1]'] || (ed['xaxis4.range'] && ed['xaxis4.range'][1]);
+
+                    if (ed['xaxis.autorange'] || ed['autosize']) {
+                        const candTrace = plot._fullData.find(t => t.type === 'candlestick');
+                        if (candTrace && candTrace.x && candTrace.x.length > 0) {
+                            x0 = candTrace.x[0];
+                            x1 = candTrace.x[candTrace.x.length - 1];
+                        }
+                    }
+
+                    if (x0 != null && x1 != null) {
+                        clearTimeout(plot.__debounceTimer);
+                        plot.__debounceTimer = setTimeout(() => rescalePlot(plot, x0, x1), 20);
+                    }
+                });
+
+                // 若當前已有可視 X 範圍，立即觸發一次確保貼合
+                const currX = (plot.layout && plot.layout.xaxis) ? plot.layout.xaxis.range : null;
+                if (currX && currX.length === 2) {
+                    rescalePlot(plot, currX[0], currX[1]);
+                }
+
+                return true;
+            }
+
+            function scanAndAttachAll() {
+                if (!parentDoc) return;
+                const allPlots = Array.from(parentDoc.querySelectorAll('.js-plotly-plot'));
+                for (const p of allPlots) {
+                    if (p.data && Array.isArray(p.data) && p.data.some(d => d.type === 'candlestick')) {
+                        attachPlot(p);
+                    }
+                }
+            }
+
+            if (!window.parent.__kline_scaler_poller) {
+                window.parent.__kline_scaler_poller = setInterval(scanAndAttachAll, 250);
+            }
+            scanAndAttachAll();
+
+            try {
+                if (!window.parent.__kline_scaler_observer && window.parent.MutationObserver) {
+                    const observer = new window.parent.MutationObserver(scanAndAttachAll);
+                    observer.observe(parentDoc.body, { childList: true, subtree: true });
+                    window.parent.__kline_scaler_observer = observer;
+                }
+            } catch (e) {}
+        })();
+        </script>
+        """,
+        height=0,
+    )
+
+
 # ════════════════════════════════════════════════════════════════════════
 # 側邊欄設計 (Sidebar Controls)
 # ════════════════════════════════════════════════════════════════════════
@@ -1007,155 +1194,7 @@ elif page == "🔬 回測分析實驗室":
         st.caption("✨ **K 線價格軸具備動態自適應縮放**：當拖曳底部時間軸滑桿或使用滾輪放大縮小特定時段時，價格 Y 軸與成交量高度將自動即時貼合該可視區間的高低點，徹底杜絕畫面扁平。")
 
         # ── 注入 K 線價格軸即時動態自適應縮放腳本 (Dynamic Y-axis Auto-Scaler) ──
-        components.html(
-            """
-            <script>
-            (function() {
-                let parentDoc = null;
-                try {
-                    parentDoc = window.parent.document;
-                } catch (e) {
-                    return;
-                }
-
-                function findKlinePlot() {
-                    if (!parentDoc) return null;
-                    const plots = Array.from(parentDoc.querySelectorAll('.js-plotly-plot'));
-                    return plots.find(p => p.data && p.data.some(d => d.type === 'candlestick'));
-                }
-
-                function setupScaler() {
-                    const plot = findKlinePlot();
-                    if (!plot || !plot._fullData || plot._fullData.length === 0) {
-                        return false;
-                    }
-
-                    // 唯一標識，確保每次頁面重繪時最新 handler 生效
-                    const handlerId = Math.random().toString(36).substring(2);
-                    plot.__kline_scaler_id = handlerId;
-
-                    let isRelayouting = false;
-                    let debounceTimer = null;
-
-                    function rescaleToVisibleRange(x0, x1) {
-                        if (isRelayouting) return;
-                        if (plot.__kline_scaler_id !== handlerId) return;
-
-                        const fd = plot._fullData;
-                        if (!fd || fd.length === 0) return;
-
-                        const candTrace = fd.find(t => t.type === 'candlestick');
-                        if (!candTrace || !candTrace.x || candTrace.x.length === 0) return;
-
-                        let t0 = new Date(x0).getTime();
-                        let t1 = new Date(x1).getTime();
-                        if (isNaN(t0) || isNaN(t1)) return;
-                        if (t0 > t1) { const tmp = t0; t0 = t1; t1 = tmp; }
-
-                        // 主圖價格 trace (Row 1: yaxis 為 'y' 或未指定)
-                        const priceTraces = fd.filter(t => !t.yaxis || t.yaxis === 'y');
-                        let minY = Infinity, maxY = -Infinity;
-
-                        for (const t of priceTraces) {
-                            if (!t.x) continue;
-                            for (let i = 0; i < t.x.length; i++) {
-                                const time = new Date(t.x[i]).getTime();
-                                if (time >= t0 && time <= t1) {
-                                    if (t.type === 'candlestick') {
-                                        if (t.low && t.low[i] < minY) minY = t.low[i];
-                                        if (t.high && t.high[i] > maxY) maxY = t.high[i];
-                                    } else if (t.y && t.y[i] != null && !isNaN(t.y[i])) {
-                                        if (t.y[i] < minY) minY = t.y[i];
-                                        if (t.y[i] > maxY) maxY = t.y[i];
-                                    }
-                                }
-                            }
-                        }
-
-                        if (minY === Infinity || maxY === -Infinity || minY >= maxY) return;
-
-                        // 8% 垂直安全留白，避免燭芯被裁切
-                        const pad = (maxY - minY) * 0.08;
-                        const newYRange = [Math.max(0, minY - pad), maxY + pad];
-
-                        // 可視區間成交量自適應
-                        let maxVol = 0;
-                        const volTrace = fd.find(t => t.type === 'bar' && (t.yaxis === 'y2' || !t.yaxis));
-                        if (volTrace && volTrace.x && volTrace.y) {
-                            for (let i = 0; i < volTrace.x.length; i++) {
-                                const time = new Date(volTrace.x[i]).getTime();
-                                if (time >= t0 && time <= t1) {
-                                    if (volTrace.y[i] > maxVol) maxVol = volTrace.y[i];
-                                }
-                            }
-                        }
-
-                        const relayoutUpdate = {
-                            'yaxis.range': newYRange,
-                            'yaxis.autorange': false
-                        };
-                        if (maxVol > 0) {
-                            relayoutUpdate['yaxis2.range'] = [0, maxVol * 1.15];
-                            relayoutUpdate['yaxis2.autorange'] = false;
-                        }
-
-                        isRelayouting = true;
-                        if (window.parent.Plotly && typeof window.parent.Plotly.relayout === 'function') {
-                            window.parent.Plotly.relayout(plot, relayoutUpdate).then(() => {
-                                isRelayouting = false;
-                            }).catch(() => {
-                                isRelayouting = false;
-                            });
-                        } else {
-                            isRelayouting = false;
-                        }
-                    }
-
-                    plot.on('plotly_relayout', function(ed) {
-                        if (isRelayouting) return;
-                        if (plot.__kline_scaler_id !== handlerId) return;
-
-                        const hasX = ('xaxis.range[0]' in ed) || ('xaxis.range' in ed) || ('xaxis.autorange' in ed);
-                        if (!hasX) return;
-
-                        let x0 = ed['xaxis.range[0]'] || (ed['xaxis.range'] && ed['xaxis.range'][0]);
-                        let x1 = ed['xaxis.range[1]'] || (ed['xaxis.range'] && ed['xaxis.range'][1]);
-
-                        if (ed['xaxis.autorange'] || !x0 || !x1) {
-                            const candTrace = plot._fullData.find(t => t.type === 'candlestick');
-                            if (candTrace && candTrace.x) {
-                                x0 = candTrace.x[0];
-                                x1 = candTrace.x[candTrace.x.length - 1];
-                            }
-                        }
-
-                        if (x0 && x1) {
-                            clearTimeout(debounceTimer);
-                            debounceTimer = setTimeout(() => rescaleToVisibleRange(x0, x1), 25);
-                        }
-                    });
-
-                    // 初始載入時若已有可視範圍，立即自適應貼合
-                    const currX = plot.layout.xaxis ? plot.layout.xaxis.range : null;
-                    if (currX && currX.length === 2) {
-                        rescaleToVisibleRange(currX[0], currX[1]);
-                    }
-
-                    return true;
-                }
-
-                let count = 0;
-                const poller = setInterval(() => {
-                    count++;
-                    if (setupScaler() || count > 40) {
-                        clearInterval(poller);
-                    }
-                }, 100);
-            })();
-            </script>
-            """,
-            height=0,
-        )
+        inject_kline_dynamic_scaler()
 
     with tab_entry_radar:
         # ── 額外獨立專屬圖表：空手等待進場點即時監控雷達 ──
@@ -1163,6 +1202,7 @@ elif page == "🔬 回測分析實驗室":
             plot_uninvested_entry_radar(symbol, result.data),
             use_container_width=True,
         )
+        inject_kline_dynamic_scaler()
 
         # ── 空手進場點即時監控雷達卡片 (Uninvested Entry Radar) ──
         latest_c = float(result.data["close"].iloc[-1])
@@ -1617,22 +1657,106 @@ elif page == "🇺🇸 美股量化監控與進場雷達":
             plot_uninvested_entry_radar(us_symbol, df_us, currency="$"),
             use_container_width=True,
         )
-        st.caption(f"💡 圖表預設聚焦 {us_symbol} 最新 120 根 K 棒（約半年），左側價格軸已啟用自動自適應貼合；標示突破目標線、季線生命線 (MA60) 及三大抄底梯隊區間。")
+        st.caption(f"💡 圖表預設聚焦 {us_symbol} 最新 120 根 K 棒（約半年），左側價格軸已啟用自動動態自適應貼合；標示突破目標線、季線生命線 (MA60) 及三大抄底梯隊區間。")
+        inject_kline_dynamic_scaler()
 
     with tab_us_kline:
-        # 預設聚焦最新 120 根 K 棒，左側價格軸與底部滑桿全面自適應
-        n_us_bars = len(df_us)
-        vis_us_range = (df_us.index[-min(120, n_us_bars)], df_us.index[-1]) if n_us_bars > 0 else None
+        st.markdown("##### 🎚️ 美股行情時間軸控制與區間平移 (Slide Bar)")
+        col_u1, col_u2, col_u3 = st.columns([3.2, 1.2, 2.6])
+        with col_u1:
+            us_timeframe = st.radio(
+                "時間週期切換",
+                ["☀️ 日線 (1D)", "📅 週線 (1W)", "🌕 月線 (1M)", "⏱️ 自訂天數 (N-Day)"],
+                index=0,
+                horizontal=True,
+                label_visibility="collapsed",
+                key="us_chart_timeframe_selector",
+            )
+        with col_u2:
+            if "自訂天數" in us_timeframe:
+                us_n_days = st.number_input("天數", min_value=2, max_value=60, value=3, step=1, label_visibility="collapsed", key="us_custom_n_days_input")
+            else:
+                us_n_days = 3
+        with col_u3:
+            us_window_choice = st.selectbox(
+                "固定檢視區間",
+                [
+                    "📐 局部聚焦 120 根 K 線 (約半年 - 預設最佳視野)",
+                    "📐 局部聚焦 60 根 K 線 (約 1 季)",
+                    "📐 局部聚焦 30 根 K 線 (約 1.5 個月 - 聚焦短線)",
+                    "📐 局部聚焦 240 根 K 線 (約 1 年)",
+                    "🌐 隨回測區間完整展開 (自動同步回測起訖)",
+                ],
+                index=0,
+                label_visibility="collapsed",
+                help="預設自動聚焦最新 120 根 K 線，呈現最清晰之型態與指標細節。拖曳下方滑動條或直接在圖表內拖曳皆可平移時間軸。",
+                key="us_kline_window_choice",
+            )
+
+        # 聚合計算當前週期總 K 棒數與時間索引
+        if "1W" in us_timeframe or "週" in us_timeframe:
+            sub_us_idx = res_us.data.resample("W-FRI").last().dropna().index
+            b_1m, b_3m, b_6m, b_1y = 6, 13, 26, 52
+        elif "1M" in us_timeframe or "月" in us_timeframe:
+            sub_us_idx = res_us.data.resample("ME").last().dropna().index
+            b_1m, b_3m, b_6m, b_1y = 2, 3, 6, 12
+        elif "自訂天數" in us_timeframe:
+            chunks = [res_us.data.iloc[i:i+us_n_days] for i in range(0, len(res_us.data), us_n_days) if len(res_us.data.iloc[i:i+us_n_days]) > 0]
+            sub_us_idx = pd.DatetimeIndex([c.index[-1] for c in chunks])
+            eff_d = max(1, us_n_days)
+            b_1m = max(2, int(30 / eff_d))
+            b_3m = max(3, int(60 / eff_d))
+            b_6m = max(5, int(120 / eff_d))
+            b_1y = max(10, int(240 / eff_d))
+        else:
+            sub_us_idx = res_us.data.index
+            b_1m, b_3m, b_6m, b_1y = 30, 60, 120, 240
+
+        n_us_bars = len(sub_us_idx)
+        us_window_map = {
+            "📐 局部聚焦 120 根 K 線 (約半年 - 預設最佳視野)": b_6m,
+            "📐 局部聚焦 60 根 K 線 (約 1 季)": b_3m,
+            "📐 局部聚焦 30 根 K 線 (約 1.5 個月 - 聚焦短線)": b_1m,
+            "📐 局部聚焦 240 根 K 線 (約 1 年)": b_1y,
+            "🌐 隨回測區間完整展開 (自動同步回測起訖)": None,
+        }
+        us_window_size = us_window_map.get(us_window_choice, b_6m)
+
+        vis_us_range = None
+        if us_window_size is not None and n_us_bars > us_window_size:
+            max_us_offset = n_us_bars - us_window_size
+            us_slider_offset = st.slider(
+                "🎚️ **美股時間軸固定區間滑動條 (Slide Bar)**",
+                min_value=0,
+                max_value=max_us_offset,
+                value=max_us_offset,
+                help="拖曳滑動條即可固定 120 根等區間在過去 10 年間左右平移！左側價格軸將自動即時貼合各時期股價。",
+                key="us_kline_slider_offset",
+            )
+            v_start = sub_us_idx[us_slider_offset]
+            v_end = sub_us_idx[us_slider_offset + us_window_size - 1]
+            vis_us_range = (v_start, v_end)
+            st.caption(f"📍 局部聚焦：`{v_start.strftime('%Y-%m-%d')}` ～ `{v_end.strftime('%Y-%m-%d')}`（{us_window_size} 根 K 棒，左側價格 Y 軸自動貼合）")
+        else:
+            if n_us_bars > 0:
+                vis_us_range = (sub_us_idx[0], sub_us_idx[-1])
+                st.caption(f"📍 美股完整區間：`{sub_us_idx[0].strftime('%Y-%m-%d')}` ～ `{sub_us_idx[-1].strftime('%Y-%m-%d')}`（共 **{n_us_bars}** 根 K 棒）")
+            else:
+                st.caption("💡 支援圖表滑動條平移與滾輪縮放。")
+
         st.plotly_chart(
             plot_candlestick_signals(
                 res_us,
-                timeframe="☀️ 日線 (1D)",
+                timeframe=us_timeframe,
+                n_days=us_n_days,
                 visible_range=vis_us_range,
                 show_rangeslider=True,
             ),
             use_container_width=True,
         )
         st.caption(f"💡 預設聚焦 {us_symbol} 最新 120 根日 K 線（約半年），左側價格軸與指標副圖均自動動態貼合；底部滑動條支援自由縮放與回溯全歷史。")
+        st.caption("✨ **K 線價格軸具備動態自適應縮放**：當拖曳底部時間軸滑桿、在圖表內按住滑鼠左右平移、或使用滾輪放大縮小時，價格 Y 軸與成交量高度將自動即時貼合該可視區間的高低點，向前拖曳回溯歷史股價隨時清晰可見，徹底杜絕畫面扁平。")
+        inject_kline_dynamic_scaler()
 
     with tab_us_backtest:
         tot_ret_us = metrics_us["total_return_pct"]

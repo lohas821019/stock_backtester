@@ -857,6 +857,7 @@ def plot_uninvested_entry_radar(
     ma_period: int = 60,
     capitulation_bias: float = -6.0,
     currency: str = "$",
+    visible_range: tuple | list | None = None,
 ) -> go.Figure:
     """
     專屬獨立圖表：空手等待進場點即時監控雷達圖。
@@ -976,29 +977,45 @@ def plot_uninvested_entry_radar(
     fig = _apply_pro_layout(fig, f"🎯 {symbol} 空手進場點即時雷達圖", height=650)
     fig.update_xaxes(rangeslider=dict(visible=False))
 
-    # 預設聚焦最新 120 根 K 線，並動態自適應左側價格軸 (Y-axis)，徹底避免全歷史區間過大造成 K 線扁平或變形
-    n_visible = min(len(df), 120)
-    if n_visible > 0:
-        vis_df = df.iloc[-n_visible:]
-        pad_x = (vis_df.index[-1] - vis_df.index[0]) / max(1, n_visible - 1) * 0.85
+    # 預設聚焦最新 120 根 K 線（或使用者指定之可視區間），並動態自適應左側價格軸 (Y-axis)
+    if visible_range is not None and len(visible_range) == 2:
+        r_start, r_end = visible_range[0], visible_range[1]
+        vis_df = df.loc[r_start:r_end]
+        if vis_df.empty:
+            vis_df = df.iloc[-min(len(df), 120):]
+    else:
+        n_visible = min(len(df), 120)
+        vis_df = df.iloc[-n_visible:] if n_visible > 0 else df
+
+    if not vis_df.empty:
+        n_vis = len(vis_df)
+        pad_x = (vis_df.index[-1] - vis_df.index[0]) / max(1, n_vis - 1) * 0.85 if n_vis >= 2 else pd.Timedelta(days=1)
         fig.update_xaxes(range=[vis_df.index[0] - pad_x, vis_df.index[-1] + pad_x])
 
-        # 動態計算可視 120 根 K 線內的價格極值 (包含 K 線、MA60 均線、突破目標線與抄底支撐線)
-        vis_ma = ma.iloc[-n_visible:]
-        p_lows = [vis_df["low"].min(), vis_ma.min(), capitulation_p]
-        p_highs = [vis_df["high"].max(), vis_ma.max(), roll_high]
-        
+        # 動態計算可視 K 線內的價格極值 (包含 K 線與 MA60 均線)
+        vis_ma = ma.loc[vis_df.index].dropna()
+        p_lows = [vis_df["low"].min()]
+        p_highs = [vis_df["high"].max()]
+        if not vis_ma.empty:
+            p_lows.append(vis_ma.min())
+            p_highs.append(vis_ma.max())
+
+        # 僅在可視區間涵蓋最新數據時，才納入最新突破目標線與抄底支撐線，避免回溯歷史時 Y 軸被當前高價拉扯
+        if df.index[-1] in vis_df.index:
+            p_lows.append(capitulation_p)
+            p_highs.append(roll_high)
+
         vis_min_p = float(min(p_lows))
         vis_max_p = float(max(p_highs))
-        p_margin = (vis_max_p - vis_min_p) * 0.06 if vis_max_p > vis_min_p else 1.0
+        p_margin = (vis_max_p - vis_min_p) * 0.08 if vis_max_p > vis_min_p else 1.0
 
         # 左側價格軸 (Row 1) 緊密自適應貼合
-        fig.update_yaxes(range=[vis_min_p - p_margin, vis_max_p + p_margin], row=1, col=1)
+        fig.update_yaxes(range=[vis_min_p - p_margin, vis_max_p + p_margin], autorange=False, row=1, col=1)
 
         # 成交量軸 (Row 2) 動態貼合可視範圍最大量
         vis_max_vol = float(vis_df["volume"].max())
         if vis_max_vol > 0:
-            fig.update_yaxes(range=[0, vis_max_vol * 1.25], row=2, col=1)
+            fig.update_yaxes(range=[0, vis_max_vol * 1.25], autorange=False, row=2, col=1)
 
     return fig
 
