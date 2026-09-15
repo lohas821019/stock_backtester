@@ -19,17 +19,44 @@ ROOT = Path(__file__).parent.parent.parent
 sys.path.insert(0, str(ROOT))
 
 # ── 預載入本地模組（確保 Streamlit Cloud 路徑正確）────────────────────
+# 雙重保險：即使 import 失敗也有完整的美股清單，不會讓 selectbox index 越界
+_US_STOCKS_FALLBACK = [
+    {"symbol": "NVDA",  "name": "輝達 (NVIDIA)"},
+    {"symbol": "AAPL",  "name": "蘋果 (Apple)"},
+    {"symbol": "MSFT",  "name": "微軟 (Microsoft)"},
+    {"symbol": "GOOGL", "name": "Alphabet (Google)"},
+    {"symbol": "AMZN",  "name": "亞馬遜 (Amazon)"},
+    {"symbol": "TSLA",  "name": "特斯拉 (Tesla)"},
+    {"symbol": "META",  "name": "Meta (Facebook)"},
+    {"symbol": "TSM",   "name": "台積電 ADR"},
+    {"symbol": "AVGO",  "name": "博通 (Broadcom)"},
+    {"symbol": "AMD",   "name": "超微 (AMD)"},
+    {"symbol": "QQQ",   "name": "那斯達克100 ETF (Invesco QQQ)"},
+    {"symbol": "SPY",   "name": "標普500 ETF (SPDR S&P 500)"},
+    {"symbol": "SOXX",  "name": "費城半導體 ETF (iShares)"},
+    {"symbol": "SMH",   "name": "VanEck 半導體 ETF"},
+    {"symbol": "PLTR",  "name": "Palantir"},
+    {"symbol": "COIN",  "name": "Coinbase"},
+    {"symbol": "ARM",   "name": "Arm Holdings"},
+    {"symbol": "MU",    "name": "美光科技 (Micron)"},
+    {"symbol": "ASML",  "name": "艾司摩爾 (ASML)"},
+    {"symbol": "INTC",  "name": "英特爾 (Intel)"},
+]
+
 try:
     from stock_backtester.data.constituents import (
         US_POPULAR_STOCKS,
         get_us_popular_options,
     )
     _us_import_ok = True
-except Exception as _us_import_err:
-    US_POPULAR_STOCKS = []
-    def get_us_popular_options():  # type: ignore[misc]
-        return []
+except Exception:
+    US_POPULAR_STOCKS = _US_STOCKS_FALLBACK
+
+    def get_us_popular_options() -> list[str]:  # type: ignore[misc]
+        return [f"{s['symbol']} {s['name']}" for s in _US_STOCKS_FALLBACK]
+
     _us_import_ok = False
+
 
 # ── 頁面設定（必須是第一個 st 呼叫）─────────────────────────────────
 st.set_page_config(
@@ -1331,10 +1358,11 @@ elif page == "🇺🇸 美股量化監控與進場雷達":
     with st.sidebar:
         st.markdown("#### 🇺🇸 **美股標的選擇**")
         us_options = ["(自訂輸入代號)"] + get_us_popular_options()
+        _us_default_idx = min(1, len(us_options) - 1)  # 預設 NVDA，但防止越界
         selected_us = st.selectbox(
             "快捷美股標的",
             us_options,
-            index=1,  # 預設 NVDA
+            index=_us_default_idx,
             help="快速選擇熱門美股巨頭或科技 ETF (QQQ, SPY, SOXX 等)",
         )
 
