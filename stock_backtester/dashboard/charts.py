@@ -975,6 +975,9 @@ def plot_uninvested_entry_radar(
 
     fig = _apply_pro_layout(fig, f"🎯 {symbol} 空手進場點即時雷達圖", height=650)
     fig.update_xaxes(rangeslider=dict(visible=False))
+    if len(df) >= 120:
+        pad = (df.index[-1] - df.index[-120]) / 120 * 0.85
+        fig.update_xaxes(range=[df.index[-120] - pad, df.index[-1] + pad])
     return fig
 
 

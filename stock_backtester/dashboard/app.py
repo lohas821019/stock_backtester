@@ -925,39 +925,50 @@ elif page == "🔬 回測分析實驗室":
             window_choice = st.selectbox(
                 "固定檢視區間",
                 [
+                    "📐 局部聚焦約半年 K 線 (預設最佳視野)",
                     "🌐 隨回測區間完整展開 (自動同步回測起訖)",
-                    "📐 局部聚焦 30 根 K 線 (約 1.5 個月 - 聚焦短線)",
-                    "📐 局部聚焦 60 根 K 線 (約 1 季)",
-                    "📐 局部聚焦 90 根 K 線 (約 4.5 個月)",
-                    "📐 局部聚焦 120 根 K 線 (約半年)",
-                    "📐 局部聚焦 240 根 K 線 (約 1 年)",
+                    "📐 局部聚焦約 1.5 個月 (聚焦短線細節)",
+                    "📐 局部聚焦約 1 季 (3 個月)",
+                    "📐 局部聚焦約 1 年 (長期波段)",
                 ],
                 index=0,
                 label_visibility="collapsed",
-                help="預設自動隨左側回測區間完整展開。亦可切換為局部固定視窗並使用滑桿平移。",
-                key="kline_window_choice",
+                help="預設自動聚焦近半年 K 線，呈現最清晰之 K 棒型態與指標細節。下方時間軸滑動條支援自由左右平移。",
+                key="kline_window_choice_v4",
             )
 
         # 聚合計算當前週期總 K 棒數與時間索引
         if "1W" in timeframe or "週" in timeframe:
             sub_idx = result.data.resample("W-FRI").last().dropna().index
+            b_1m, b_3m, b_6m, b_1y = 6, 13, 26, 52
         elif "1M" in timeframe or "月" in timeframe:
             sub_idx = result.data.resample("ME").last().dropna().index
+            b_1m, b_3m, b_6m, b_1y = 2, 3, 6, 12
         elif "自訂天數" in timeframe:
             chunks = [result.data.iloc[i:i+n_days] for i in range(0, len(result.data), n_days) if len(result.data.iloc[i:i+n_days]) > 0]
             sub_idx = pd.DatetimeIndex([c.index[-1] for c in chunks])
+            eff_d = max(1, n_days)
+            b_1m = max(2, int(30 / eff_d))
+            b_3m = max(3, int(60 / eff_d))
+            b_6m = max(5, int(120 / eff_d))
+            b_1y = max(10, int(240 / eff_d))
         else:
             sub_idx = result.data.index
+            b_1m, b_3m, b_6m, b_1y = 30, 60, 120, 240
 
         n_bars = len(sub_idx)
         window_map = {
-            "📐 局部聚焦 30 根 K 線 (約 1.5 個月 - 聚焦短線)": 30,
-            "📐 局部聚焦 60 根 K 線 (約 1 季)": 60,
-            "📐 局部聚焦 90 根 K 線 (約 4.5 個月)": 90,
-            "📐 局部聚焦 120 根 K 線 (約半年)": 120,
-            "📐 局部聚焦 240 根 K 線 (約 1 年)": 240,
+            "📐 局部聚焦約半年 K 線 (預設最佳視野)": b_6m,
+            "📐 局部聚焦 120 根 K 線 (約半年)": b_6m,
+            "🌐 隨回測區間完整展開 (自動同步回測起訖)": None,
+            "📐 局部聚焦約 1.5 個月 (聚焦短線細節)": b_1m,
+            "📐 局部聚焦 30 根 K 線 (約 1.5 個月 - 聚焦短線)": b_1m,
+            "📐 局部聚焦約 1 季 (3 個月)": b_3m,
+            "📐 局部聚焦 60 根 K 線 (約 1 季)": b_3m,
+            "📐 局部聚焦約 1 年 (長期波段)": b_1y,
+            "📐 局部聚焦 240 根 K 線 (約 1 年)": b_1y,
         }
-        window_size = window_map.get(window_choice, None)
+        window_size = window_map.get(window_choice, b_6m)
 
         visible_range = None
         if window_size is not None and n_bars > window_size:
