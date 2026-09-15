@@ -53,7 +53,11 @@ class Database:
         df_to_save.index.name = "date"
         df_to_save = df_to_save.reset_index()
         # 只保留 YYYY-MM-DD，避免時區轉換導致跨日錯位（yfinance 回傳 +08:00 轉 UTC 會變前一天）
-        df_to_save["date"] = pd.to_datetime(df_to_save["date"]).dt.strftime("%Y-%m-%d")
+        df_to_save["date"] = (
+            pd.to_datetime(df_to_save["date"], utc=True)
+            .dt.tz_convert("Asia/Taipei")
+            .dt.strftime("%Y-%m-%d")
+        )
 
         with self._engine.begin() as conn:
             # 使用 pandas to_sql replace 模式（若資料量小可接受）
@@ -74,8 +78,12 @@ class Database:
             combined_to_save = combined.copy()
             combined_to_save.index.name = "date"
             combined_to_save = combined_to_save.reset_index()
-            # 同樣只存 YYYY-MM-DD
-            combined_to_save["date"] = pd.to_datetime(combined_to_save["date"]).dt.strftime("%Y-%m-%d")
+            # 統一轉成 YYYY-MM-DD 字串：先取日期部分再格式化，相容 Timestamp / tz-aware / 純字串
+            combined_to_save["date"] = (
+                pd.to_datetime(combined_to_save["date"], utc=True)
+                .dt.tz_convert("Asia/Taipei")
+                .dt.strftime("%Y-%m-%d")
+            )
             combined_to_save.to_sql(table, conn, if_exists="replace", index=False)
 
         logger.debug("[Database] 已儲存 %d 筆資料到 %s", len(df), table)
