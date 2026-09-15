@@ -731,7 +731,7 @@ elif page == "🔬 回測分析實驗室":
         try:
             if force_refresh:
                 st.cache_data.clear()
-            df, is_cache = _load_data(symbol, start_date, end_date, market, force_refresh=force_refresh)
+            df, is_cache = _load_data(symbol, start_date, end_date, market, force_refresh=force_refresh, cache_version=date.today().isoformat())
             if df.empty:
                 st.error(f"❌ 查無代號 **{symbol}** 的行情數據，請確認代號正確性。")
                 st.stop()
@@ -1415,7 +1415,7 @@ elif page == "🇺🇸 美股量化監控與進場雷達":
 
     with st.spinner(f"正在自 Yahoo Finance 抓取 {us_symbol} 過去 {hist_years} 年完整還原行情並進行量化運算..."):
         try:
-            df_us, is_us_cached = _load_data(us_symbol, start_us, today_us, market="us", cache_version="v2_us")
+            df_us, is_us_cached = _load_data(us_symbol, start_us, today_us, market="us", cache_version=f"us_{date.today().isoformat()}")
             if df_us.empty:
                 st.error(f"❌ 查無美股代號 **{us_symbol}** 的行情數據，請確認代號正確性。")
                 st.stop()
