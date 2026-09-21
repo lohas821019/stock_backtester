@@ -39,7 +39,13 @@ class TelegramNotifier:
         self._token = token
         self._chat_id = chat_id
 
-    def send(self, text: str, parse_mode: str = "HTML", disable_web_page_preview: bool = True) -> bool:
+    def send(
+        self,
+        text: str,
+        parse_mode: str = "HTML",
+        disable_web_page_preview: bool = True,
+        silent: bool = False,
+    ) -> bool:
         """
         發送文字訊息。
 
@@ -47,6 +53,7 @@ class TelegramNotifier:
             text:                     訊息內容（支援 HTML 或 Markdown 格式）
             parse_mode:               "HTML" 或 "Markdown"
             disable_web_page_preview: 是否關閉網址預覽卡片（預設 True 保持版面乾淨）
+            silent:                   是否以靜音模式發送（True = 使用者手機不震動不響鈴，適用於例行打卡與收盤總結）
 
         Returns:
             True = 發送成功，False = 失敗
@@ -57,6 +64,7 @@ class TelegramNotifier:
             "text": text,
             "parse_mode": parse_mode,
             "disable_web_page_preview": disable_web_page_preview,
+            "disable_notification": silent,
         }
         try:
             resp = requests.post(url, json=payload, timeout=10)

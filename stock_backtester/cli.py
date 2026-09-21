@@ -623,6 +623,7 @@ def cmd_watch_live(ctx, stocks, notify, summary, interval, max_alerts, cooldown,
     table.add_column("盤中高 / 低", justify="center")
     table.add_column("🚀 20日突破價", justify="right")
     table.add_column("🎯 季線回踩區", justify="center")
+    table.add_column("🛑 季線防守", justify="right")
     table.add_column("即時觸碰狀態", style="bold")
     table.add_column("今日推播次數", justify="center")
 
@@ -634,9 +635,12 @@ def cmd_watch_live(ctx, stocks, notify, summary, interval, max_alerts, cooldown,
 
         is_bo = (q.high_price >= t.roll_20_h or q.current_price >= t.roll_20_h)
         is_pb = (q.low_price <= t.pullback_max_p and q.current_price >= t.pullback_min_p * 0.98)
+        is_sl = (q.current_price < t.ma60 * 0.98)
 
         status_str = "[dim]持續追蹤中[/dim]"
-        if is_bo:
+        if is_sl:
+            status_str = "[red]🛑 跌破季線防守！[/red]"
+        elif is_bo:
             status_str = "[green]🚨 盤中已突破！[/green]"
         elif is_pb:
             status_str = "[cyan]🎯 踩入季線回踩區[/cyan]"
@@ -646,6 +650,8 @@ def cmd_watch_live(ctx, stocks, notify, summary, interval, max_alerts, cooldown,
         if cnt >= max_alerts:
             cnt_str = f"[red]已滿 {max_alerts} 次 (靜默)[/red]"
 
+        sl_price = round(t.ma60 * 0.98, 2)
+
         table.add_row(
             s,
             q.name,
@@ -653,6 +659,7 @@ def cmd_watch_live(ctx, stocks, notify, summary, interval, max_alerts, cooldown,
             f"${q.high_price:.2f} / ${q.low_price:.2f}",
             f"${t.roll_20_h:.2f}",
             f"${t.pullback_min_p:.2f} ~ ${t.pullback_max_p:.2f}",
+            f"${sl_price:.2f}",
             status_str,
             cnt_str,
         )

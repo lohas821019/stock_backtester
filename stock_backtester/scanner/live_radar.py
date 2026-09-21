@@ -54,6 +54,7 @@ class RealtimeQuote:
     low_price: float
     yesterday_close: float
     volume: int
+    quote_date: str = ""
     raw_data: dict = field(default_factory=dict)
 
 
@@ -227,6 +228,7 @@ class LiveEntryRadar:
                 yest_p = float(it.get("y")) if it.get("y") and it.get("y") != "-" else cur_p
                 vol = int(it.get("v", 0)) if it.get("v") and it.get("v") != "-" else 0
                 t_str = it.get("t", datetime.now().strftime("%H:%M:%S"))
+                d_str = it.get("d", "")
                 name = it.get("n", self.STOCK_NAMES.get(sym, sym))
 
                 quotes[sym] = RealtimeQuote(
@@ -239,6 +241,7 @@ class LiveEntryRadar:
                     low_price=round(low_p, 2),
                     yesterday_close=round(yest_p, 2),
                     volume=vol,
+                    quote_date=d_str,
                     raw_data=it,
                 )
         except Exception as e:
@@ -246,19 +249,32 @@ class LiveEntryRadar:
 
         return quotes
 
-    def check_and_alert(self, quotes: dict[str, RealtimeQuote], send_telegram: bool = True) -> list[dict]:
+    def check_and_alert(
+        self,
+        quotes: dict[str, RealtimeQuote],
+        send_telegram: bool = True,
+        filter_holiday: bool = True,
+    ) -> list[dict]:
         """
-        核心進場訊號檢測：比對即時報價與策略門檻，碰觸立即發送急報。
+        核心進場與防守訊號檢測：比對即時報價與策略門檻，碰觸立即發送急報。
         嚴格套用：
-        1. 單一標的每日推播上限 5 次（滿 5 次後自動靜默，絕不重複洗版）。
-        2. 推播冷卻時間（預設 3 分鐘），避免短時間內密集震盪連續推播。
+        1. 國定假日/非交易日過濾：避免舊盤後快取數據觸發假警報。
+        2. 單一標的每日推播上限 5 次（滿 5 次後自動靜默，絕不重複洗版）。
+        3. 推播冷卻時間（預設 3 分鐘），避免短時間內密集震盪連續推播。
+        4. 四大進場梯隊 + 季線跌破停損防守警戒。
         """
         triggered_signals = []
         now_ts = time.time()
+        today_str = date.today().strftime("%Y%m%d")
 
         for stock, q in quotes.items():
             t = self.targets.get(stock)
             if not t:
+                continue
+
+            # 檢查報價日期是否為今日（防休市日/國定假日抓取前一日舊數據觸發誤報）
+            if filter_holiday and q.quote_date and q.quote_date != today_str:
+                logger.info(f"[{stock}] 報價日期 {q.quote_date} 非今日交易日 ({today_str})，跳過防休市假警報")
                 continue
 
             # 檢查是否已達每日 5 次通知上限
@@ -293,7 +309,7 @@ class LiveEntryRadar:
                 self.alerted_events.add((stock, "breakout"))
 
             # 2. 🎯 第一梯隊：季線回踩抄底區 (MA60 -2% ~ +1%)
-            elif (q.low_price <= t.pullback_max_p and q.current_price >= t.pullback_min_p * 0.98) and (stock, "pullback") not in self.alerted_events:
+            elif (q.low_price <= t.pullback_max_p and q.current_price >= t.pullback_min_p) and (stock, "pullback") not in self.alerted_events:
                 candidate_sig = {
                     "stock": stock,
                     "name": q.name,
@@ -308,8 +324,25 @@ class LiveEntryRadar:
                 }
                 self.alerted_events.add((stock, "pullback"))
 
-            # 3. 🌟 第二梯隊：波段黃金拉回區 (-8% ~ -10%)
-            elif (q.low_price <= t.tier2_max_p and q.current_price >= t.tier2_min_p * 0.98) and (stock, "tier2") not in self.alerted_events:
+            # 3. 🛑 停損防守警報：盤中實質跌破 60 日季線生命線 (MA60 -2%)
+            elif (q.current_price < t.ma60 * 0.98) and (stock, "stop_loss_ma60") not in self.alerted_events:
+                candidate_sig = {
+                    "stock": stock,
+                    "name": q.name,
+                    "event_key": "stop_loss_ma60",
+                    "title": "🛑 警報：跌破 60 日季線生命線防守點！",
+                    "detail": f"現價 ${q.current_price:.2f} 已實質跌破季線 (${t.ma60:.2f}) 逾 -2.0%，多頭趨勢破位，若有持倉請審慎評估停損！",
+                    "current": q.current_price,
+                    "target": round(t.ma60 * 0.98, 2),
+                    "ma60": t.ma60,
+                    "bias": bias,
+                    "time": q.trade_time,
+                    "is_stop_loss": True,
+                }
+                self.alerted_events.add((stock, "stop_loss_ma60"))
+
+            # 4. 🌟 第二梯隊：波段黃金拉回區 (-8% ~ -10%)
+            elif (q.low_price <= t.tier2_max_p and q.current_price >= t.tier2_min_p) and (stock, "tier2") not in self.alerted_events:
                 candidate_sig = {
                     "stock": stock,
                     "name": q.name,
@@ -324,7 +357,7 @@ class LiveEntryRadar:
                 }
                 self.alerted_events.add((stock, "tier2"))
 
-            # 4. 🛡️ 第三梯隊：極度恐慌超跌底 (季線負乖離 <= -6%)
+            # 5. 🛡️ 第三梯隊：極度恐慌超跌底 (季線負乖離 <= -6%)
             elif (q.low_price <= t.capitulation_p) and (stock, "panic") not in self.alerted_events:
                 candidate_sig = {
                     "stock": stock,
@@ -356,12 +389,39 @@ class LiveEntryRadar:
         return triggered_signals
 
     def _send_instant_alert(self, sig: dict) -> None:
-        """發送盤中碰價即時 Telegram 通知與系統桌面通知。"""
+        """發送盤中碰價即時 Telegram 通知與系統桌面通知（附上班族行動指引與防守建議）。"""
         quote_url = f"https://tw.stock.yahoo.com/quote/{sig['stock']}.TW"
         diff = sig['current'] - sig['target']
         diff_str = f"+{diff:.2f}" if diff >= 0 else f"{diff:.2f}"
 
         count_str = f"🔔 <b>今日通知次數</b>：第 <b>{sig.get('alert_index', 1)}</b> 次 / 上限 {sig.get('max_alerts', self.max_alerts_per_stock)} 次"
+
+        # 上班族建議防守停損價與行動指引
+        event_key = sig.get("event_key", "")
+        if event_key == "breakout":
+            suggested_sl = round(sig["target"] * 0.985, 2)
+            action_tips = (
+                f"🎯 <b>上班族行動指南</b>：\n"
+                f"• <b>建議防守停損價</b>：<b>${suggested_sl:.2f} 元</b> (回跌 -1.5% 停損退場)\n"
+                f"• <b>操作建議</b>：突破確認量能若放大可分批佈局；若跌破防守價切勿盲目凹單！\n"
+            )
+        elif event_key in ("pullback", "tier2", "panic"):
+            suggested_sl = round(sig["ma60"] * 0.98, 2)
+            action_tips = (
+                f"🎯 <b>上班族行動指南</b>：\n"
+                f"• <b>建議防守停損價</b>：<b>${suggested_sl:.2f} 元</b> (季線破位 -2% 停損點)\n"
+                f"• <b>操作建議</b>：踩入回踩守穩區，可分批分次低接；若持續下破防守價則退場！\n"
+            )
+        elif sig.get("is_stop_loss"):
+            action_tips = (
+                f"⚠️ <b>上班族緊急防守指引</b>：\n"
+                f"• 股價已實質跌破 60 日季線生命線逾 2%，多頭波段暫告受挫！\n"
+                f"• 若手中有持股部位，請依紀律堅決執行減碼或停損，切勿放任虧損擴大！\n"
+            )
+        else:
+            action_tips = (
+                f"💡 <b>操作提醒</b>：請檢視盤面確認量價守穩狀況，依紀律進場並落實停損防守！\n"
+            )
 
         # 若已達最後一次上限，附帶防打擾提醒
         limit_note = ""
@@ -373,7 +433,7 @@ class LiveEntryRadar:
             )
 
         msg = (
-            f"🚨 <b>【{sig['stock']} {sig['name']} 盤中進場急報】</b>\n\n"
+            f"🚨 <b>【{sig['stock']} {sig['name']} 盤中急報】</b>\n\n"
             f"⚡ <b>觸發訊號：{sig['title']}</b>\n"
             f"• 最新成交價：<a href='{quote_url}'><b>${sig['current']:.2f} 元</b></a>\n"
             f"• 策略門檻價：<b>${sig['target']:.2f} 元</b> (差距 {diff_str} 元)\n"
@@ -381,14 +441,14 @@ class LiveEntryRadar:
             f"• 撮合時間：<b>{sig['time']} (盤中即時)</b>\n"
             f"• 觸發詳情：{sig['detail']}\n"
             f"• {count_str}\n\n"
-            f"💡 <b>操作提醒</b>：\n"
-            f"策略金額已於盤中觸碰！請檢視盤面確認量價守穩狀況，依紀律進場並落實停損防守！\n"
+            f"{action_tips}\n"
             f"👉 <a href='{quote_url}'>點此查看 {sig['stock']} Yahoo 即時盤面</a>"
             f"{limit_note}"
         )
 
         if self.notifier:
-            self.notifier.send(msg)
+            # 盤中重要訊號採響鈴發送 (silent=False)
+            self.notifier.send(msg, silent=False)
             logger.info(f"已發送 Telegram 盤中即時通知: {sig['stock']} {sig['event_key']} (第 {sig.get('alert_index', 1)} 次)")
 
         # macOS 桌面即時橫幅通知
@@ -399,8 +459,41 @@ class LiveEntryRadar:
             except Exception:
                 pass
 
+    def send_morning_heartbeat(self, quotes: Optional[dict[str, RealtimeQuote]] = None) -> None:
+        """
+        早晨 09:00 開盤安心打卡通知（以靜音推播發送，手機不震動響鈴）。
+        讓上班族一早確認雲端伺服器正常上線，並一覽今日所有監控門檻。
+        """
+        if not self.notifier:
+            return
+
+        today_str = date.today().strftime("%Y-%m-%d")
+        lines = [
+            f"☀️ <b>【09:00 盤中實時雷達上線打卡】</b> ({today_str})\n",
+            f"雲端守護行程已正常啟動！台股已正式開盤，今日為您實時盯盤：\n",
+        ]
+        for stock in self.stocks:
+            t = self.targets.get(stock)
+            if not t:
+                continue
+            lines.append(
+                f"📌 <b>{stock} {t.name}</b>\n"
+                f"• 🚀 20日突破門檻：<b>${t.roll_20_h:.2f}</b>\n"
+                f"• 🎯 季線回踩區間：${t.pullback_min_p:.2f} ~ ${t.pullback_max_p:.2f} (MA60 ${t.ma60:.2f})\n"
+                f"• 🌟 黃金拉回區間：${t.tier2_min_p:.2f} ~ ${t.tier2_max_p:.2f}\n"
+                f"• 🛑 跌破季線防守：< ${t.ma60 * 0.98:.2f}\n"
+            )
+        lines.append(
+            f"🔔 <b>防頻繁機制</b>：每日上限 {self.max_alerts_per_stock} 次 | 碰價冷卻 {self.cooldown_seconds} 秒\n"
+            f"💼 祝您今日工作順利，盤中若有碰觸關鍵點位將第一時間即刻通知您！"
+        )
+        msg = "\n".join(lines)
+        # 開盤打卡以靜音發送 (silent=True)，避免開會干擾
+        self.notifier.send(msg, silent=True)
+        logger.info("已發送早晨 09:00 開盤打卡通知 (靜音模式)")
+
     def send_closing_summary(self, quotes: dict[str, RealtimeQuote]) -> None:
-        """發送每日收盤大總結推播。"""
+        """發送每日收盤大總結推播（以靜音模式發送，不干擾午休或下午開會）。"""
         if not self.notifier:
             return
 
@@ -434,12 +527,14 @@ class LiveEntryRadar:
 
         lines.append("☕ <b>監控狀態</b>：今日交易已結束，明日開盤 08:50 將自動恢復即時盯盤！")
         summary_msg = "\n".join(lines)
-        self.notifier.send(summary_msg)
-        logger.info("已發送今日收盤總結推播")
+        # 收盤總結以靜音發送 (silent=True)
+        self.notifier.send(summary_msg, silent=True)
+        logger.info("已發送今日收盤總結推播 (靜音模式)")
 
     def run_daemon(self, max_duration_hours: float = 5.0) -> None:
         """
-        常駐守護執行緒：在台股交易時段 (08:58 ~ 13:35) 每隔 poll_interval 秒即時巡檢。
+        常駐守護執行緒：在台股交易時段 (09:00 ~ 13:35) 每隔 poll_interval 秒即時巡檢。
+        08:50 ~ 08:59 盤前靜默準備，09:00 開盤正式啟動並發送打卡。
         """
         logger.info(f"啟動盤中實時雷達守護行程 (標的: {self.stocks}, 間隔: {self.poll_interval}s, 上限: {self.max_alerts_per_stock}次)")
         self.load_targets()
@@ -447,6 +542,7 @@ class LiveEntryRadar:
         start_time = time.time()
         max_seconds = max_duration_hours * 3600
         summary_sent = False
+        heartbeat_sent = False
 
         while True:
             now = datetime.now()
@@ -461,12 +557,18 @@ class LiveEntryRadar:
                 logger.info("已過收盤時間 13:35，守護行程正常結束。")
                 break
 
-            # 若未到 08:58（盤前撮合前），稍作等待
-            if cur_time_int < 858:
+            # 09:00 開盤打卡（開盤第一分鐘發送一次安心打卡）
+            if cur_time_int >= 900 and not heartbeat_sent:
+                quotes = self.fetch_quotes()
+                self.send_morning_heartbeat(quotes)
+                heartbeat_sent = True
+
+            # 若未到 09:00（盤前試撮時段 08:30~08:59:59，排除主力虛假試撮大單），等待開盤
+            if cur_time_int < 900:
                 time.sleep(15)
                 continue
 
-            # 盤中交易時段 (08:58 ~ 13:35)：即時抓取撮合並檢測碰價
+            # 盤中交易時段 (09:00 ~ 13:30)：即時抓取撮合並檢測碰價
             quotes = self.fetch_quotes()
             if quotes:
                 self.check_and_alert(quotes, send_telegram=True)
