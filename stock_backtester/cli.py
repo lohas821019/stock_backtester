@@ -573,5 +573,94 @@ def cmd_watch_entry(ctx, stock, notify, summary, intraday):
             console.print("[dim]💡 盤中巡檢模式：未觸發進場訊號，保持靜默不打擾。[/dim]")
 
 
+@main.command("watch-live")
+@click.option("--stocks", "-s", default="0050,0052", help="股票代號清單（逗號分隔，預設：0050,0052）")
+@click.option("--notify/--no-notify", default=True, help="是否發送 Telegram 即時急報（預設開啟）")
+@click.option("--summary/--no-summary", default=True, help="收盤時是否發送今日總結（預設開啟）")
+@click.option("--interval", default=25, type=int, help="盤中輪詢間隔秒數（預設 25 秒）")
+@click.option("--daemon/--once", default=False, help="模式：--daemon 常駐即時監控直到收盤；--once 僅執行單次檢測")
+@click.option("--test", is_flag=True, default=False, help="立即發送一則測試通知以驗證連線")
+@click.pass_context
+def cmd_watch_live(ctx, stocks, notify, summary, interval, daemon, test):
+    """【盤中實時進場雷達】毫秒級即時撮合監控，碰觸策略門檻立即發送 Telegram 急報！"""
+    from stock_backtester.scanner.live_radar import LiveEntryRadar
+    from stock_backtester.notifiers.telegram_notifier import TelegramNotifier
+
+    stock_list = [s.strip() for s in stocks.split(",") if s.strip()]
+    console.print(f"[bold cyan]🎯 盤中實時進場雷達啟動[/bold cyan] ── 監控標的: {', '.join(stock_list)} | 輪詢頻率: {interval}秒")
+
+    notifier = None
+    if notify or test:
+        token, chat_id = _load_env_to_os()
+        if token and chat_id and token != "your_bot_token_here":
+            notifier = TelegramNotifier(token=token, chat_id=chat_id)
+            if test:
+                console.print("[cyan]發送 Telegram 測試急報...[/cyan]")
+                notifier.send("🧪 <b>【盤中實時進場雷達測試】</b>\n\nTelegram 通道連線正常！盤中碰價時將在此 30 秒內極速推播。")
+                console.print("[green]✅ 測試訊息已發送至 Telegram！[/green]")
+        else:
+            console.print("[yellow]⚠️ 未設定 Telegram 憑證，將僅在終端輸出，不發送推播。[/yellow]")
+
+    radar = LiveEntryRadar(stocks=stock_list, notifier=notifier, poll_interval=interval)
+
+    with console.status("[cyan]計算歷史門檻與抓取撮合行情...[/cyan]"):
+        targets = radar.load_targets()
+        quotes = radar.fetch_quotes()
+
+    # 輸出表格
+    table = Table(title="🎯 盤中實時進場雷達監控看板", show_header=True, header_style="bold cyan")
+    table.add_column("代號", style="bold")
+    table.add_column("標的名稱")
+    table.add_column("現價 (撮合時間)", justify="right")
+    table.add_column("盤中高 / 低", justify="center")
+    table.add_column("🚀 20日突破價", justify="right")
+    table.add_column("🎯 季線回踩區", justify="center")
+    table.add_column("即時觸碰狀態", style="bold")
+
+    for s in stock_list:
+        t = targets.get(s)
+        q = quotes.get(s)
+        if not t or not q:
+            continue
+
+        is_bo = (q.high_price >= t.roll_20_h or q.current_price >= t.roll_20_h)
+        is_pb = (q.low_price <= t.pullback_max_p and q.current_price >= t.pullback_min_p * 0.98)
+
+        status_str = "[dim]持續追蹤中[/dim]"
+        if is_bo:
+            status_str = "[green]🚨 盤中已突破！[/green]"
+        elif is_pb:
+            status_str = "[cyan]🎯 踩入季線回踩區[/cyan]"
+
+        table.add_row(
+            s,
+            q.name,
+            f"${q.current_price:.2f} ({q.trade_time})",
+            f"${q.high_price:.2f} / ${q.low_price:.2f}",
+            f"${t.roll_20_h:.2f}",
+            f"${t.pullback_min_p:.2f} ~ ${t.pullback_max_p:.2f}",
+            status_str,
+        )
+
+    console.print(table)
+
+    # 檢測當前狀態並推播
+    signals = radar.check_and_alert(quotes, send_telegram=notify)
+    if signals:
+        for sig in signals:
+            console.print(f"[bold green]🚨 觸發買訊: {sig['stock']} {sig['title']}[/bold green]")
+    else:
+        console.print("[dim]目前無新觸發訊號，維持觀望。[/dim]")
+
+    if daemon:
+        console.print(f"[bold green]⚡ 進入常駐巡檢守護模式（每 {interval} 秒檢查一次，持續至 13:35 收盤）...[/bold green]")
+        console.print("[dim]提示：按 Ctrl+C 可隨時中止常駐監控。[/dim]")
+        try:
+            radar.run_daemon()
+        except KeyboardInterrupt:
+            console.print("\n[yellow]已手動停止盤中雷達守護行程。[/yellow]")
+
+
 if __name__ == "__main__":
     main()
+
