@@ -578,16 +578,18 @@ def cmd_watch_entry(ctx, stock, notify, summary, intraday):
 @click.option("--notify/--no-notify", default=True, help="是否發送 Telegram 即時急報（預設開啟）")
 @click.option("--summary/--no-summary", default=True, help="收盤時是否發送今日總結（預設開啟）")
 @click.option("--interval", default=25, type=int, help="盤中輪詢間隔秒數（預設 25 秒）")
+@click.option("--max-alerts", default=5, type=int, help="單檔標的每日盤中最大推播次數（預設 5 次，滿 5 次自動靜默）")
+@click.option("--cooldown", default=180, type=int, help="相同標的兩次推播間隔冷卻秒數（預設 180 秒，防止短時間密集洗版）")
 @click.option("--daemon/--once", default=False, help="模式：--daemon 常駐即時監控直到收盤；--once 僅執行單次檢測")
 @click.option("--test", is_flag=True, default=False, help="立即發送一則測試通知以驗證連線")
 @click.pass_context
-def cmd_watch_live(ctx, stocks, notify, summary, interval, daemon, test):
+def cmd_watch_live(ctx, stocks, notify, summary, interval, max_alerts, cooldown, daemon, test):
     """【盤中實時進場雷達】毫秒級即時撮合監控，碰觸策略門檻立即發送 Telegram 急報！"""
     from stock_backtester.scanner.live_radar import LiveEntryRadar
     from stock_backtester.notifiers.telegram_notifier import TelegramNotifier
 
     stock_list = [s.strip() for s in stocks.split(",") if s.strip()]
-    console.print(f"[bold cyan]🎯 盤中實時進場雷達啟動[/bold cyan] ── 監控標的: {', '.join(stock_list)} | 輪詢頻率: {interval}秒")
+    console.print(f"[bold cyan]🎯 盤中實時進場雷達啟動[/bold cyan] ── 監控標的: {', '.join(stock_list)} | 輪詢頻率: {interval}秒 | 當日上限: {max_alerts}次 (冷卻 {cooldown}s)")
 
     notifier = None
     if notify or test:
@@ -601,7 +603,13 @@ def cmd_watch_live(ctx, stocks, notify, summary, interval, daemon, test):
         else:
             console.print("[yellow]⚠️ 未設定 Telegram 憑證，將僅在終端輸出，不發送推播。[/yellow]")
 
-    radar = LiveEntryRadar(stocks=stock_list, notifier=notifier, poll_interval=interval)
+    radar = LiveEntryRadar(
+        stocks=stock_list,
+        notifier=notifier,
+        poll_interval=interval,
+        max_alerts_per_stock=max_alerts,
+        cooldown_seconds=cooldown,
+    )
 
     with console.status("[cyan]計算歷史門檻與抓取撮合行情...[/cyan]"):
         targets = radar.load_targets()
@@ -616,6 +624,7 @@ def cmd_watch_live(ctx, stocks, notify, summary, interval, daemon, test):
     table.add_column("🚀 20日突破價", justify="right")
     table.add_column("🎯 季線回踩區", justify="center")
     table.add_column("即時觸碰狀態", style="bold")
+    table.add_column("今日推播次數", justify="center")
 
     for s in stock_list:
         t = targets.get(s)
@@ -632,6 +641,11 @@ def cmd_watch_live(ctx, stocks, notify, summary, interval, daemon, test):
         elif is_pb:
             status_str = "[cyan]🎯 踩入季線回踩區[/cyan]"
 
+        cnt = radar.alert_counts.get(s, 0)
+        cnt_str = f"[bold yellow]{cnt}/{max_alerts}[/bold yellow]" if cnt > 0 else f"{cnt}/{max_alerts}"
+        if cnt >= max_alerts:
+            cnt_str = f"[red]已滿 {max_alerts} 次 (靜默)[/red]"
+
         table.add_row(
             s,
             q.name,
@@ -640,6 +654,7 @@ def cmd_watch_live(ctx, stocks, notify, summary, interval, daemon, test):
             f"${t.roll_20_h:.2f}",
             f"${t.pullback_min_p:.2f} ~ ${t.pullback_max_p:.2f}",
             status_str,
+            cnt_str,
         )
 
     console.print(table)
@@ -648,7 +663,7 @@ def cmd_watch_live(ctx, stocks, notify, summary, interval, daemon, test):
     signals = radar.check_and_alert(quotes, send_telegram=notify)
     if signals:
         for sig in signals:
-            console.print(f"[bold green]🚨 觸發買訊: {sig['stock']} {sig['title']}[/bold green]")
+            console.print(f"[bold green]🚨 觸發買訊: {sig['stock']} {sig['title']} (第 {sig.get('alert_index')} 次)[/bold green]")
     else:
         console.print("[dim]目前無新觸發訊號，維持觀望。[/dim]")
 

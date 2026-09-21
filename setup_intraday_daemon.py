@@ -71,6 +71,10 @@ def install():
             "--summary",
             "--interval",
             "20",
+            "--max-alerts",
+            "5",
+            "--cooldown",
+            "180",
             "--daemon",
         ],
         "WorkingDirectory": str(PROJECT_DIR),
@@ -146,6 +150,10 @@ def run_now():
         "--summary",
         "--interval",
         "20",
+        "--max-alerts",
+        "5",
+        "--cooldown",
+        "180",
         "--daemon",
     ]
     subprocess.run(cmd, cwd=str(PROJECT_DIR))

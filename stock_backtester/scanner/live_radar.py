@@ -5,15 +5,18 @@
 - 支援 TWSE / TPEx MIS 官方即時撮合行情 API。
 - 盤中即時偵測四大進場梯隊（右側突破、季線回踩、波段黃金拉回、極度恐慌抄底）。
 - 碰價即時 Telegram 推播（30 秒內通知），杜絕收盤後或延遲推播。
-- 內建當日防重複推播機制，且收盤後自動發送當日總結報表。
+- 內建每日防頻繁機制：單一標的每日推播上限 5 次 + 3 分鐘間隔冷卻，徹底杜絕洗版。
+- 收盤 13:35 自動發送當日總結報表。
 """
 
+import json
 import logging
 import platform
 import subprocess
 import time
 from dataclasses import dataclass, field
 from datetime import date, datetime, timedelta
+from pathlib import Path
 from typing import Optional
 
 import pandas as pd
@@ -74,14 +77,73 @@ class LiveEntryRadar:
         stocks: Optional[list[str]] = None,
         notifier: Optional[TelegramNotifier] = None,
         poll_interval: int = 25,
+        max_alerts_per_stock: int = 5,
+        cooldown_seconds: int = 180,
+        state_file: Optional[Path] = None,
+        persist_state: bool = True,
     ):
         self.stocks = stocks or ["0050", "0052"]
         self.notifier = notifier
         self.poll_interval = poll_interval
+        self.max_alerts_per_stock = max_alerts_per_stock
+        self.cooldown_seconds = cooldown_seconds
+        self.state_file = Path(state_file) if state_file else None
+        self.persist_state = persist_state
         self.dm = DataManager()
         self.targets: dict[str, RadarTarget] = {}
-        # 記錄今日已發送過之警報，格式：{(symbol, "breakout"), ...}
+        
+        # 記錄今日每檔股票的已發送次數：{"0050": 3, "0052": 1}
+        self.alert_counts: dict[str, int] = {}
+        # 記錄每檔股票最後發送時間戳：{"0050": 1726900000.0}
+        self.last_alert_time: dict[str, float] = {}
+        # 記錄已觸發過的特定訊號事件：{(symbol, "breakout"), ...}
         self.alerted_events: set[tuple[str, str]] = set()
+
+        if self.persist_state:
+            self._load_daily_state()
+
+    def _get_state_file_path(self) -> Path:
+        if self.state_file:
+            return self.state_file
+        today_str = date.today().strftime("%Y%m%d")
+        home_dir = Path.home() / ".stock_backtester"
+        try:
+            home_dir.mkdir(parents=True, exist_ok=True)
+            return home_dir / f"live_radar_state_{today_str}.json"
+        except Exception:
+            return Path(f"/tmp/live_radar_state_{today_str}.json")
+
+    def _load_daily_state(self) -> None:
+        """載入當日狀態檔，確保重新啟動或備援任務不會重置 5 次上限計數。"""
+        if not self.persist_state:
+            return
+        state_file = self._get_state_file_path()
+        if state_file.exists():
+            try:
+                data = json.loads(state_file.read_text(encoding="utf-8"))
+                if data.get("date") == date.today().strftime("%Y-%m-%d"):
+                    self.alert_counts = data.get("alert_counts", {})
+                    self.last_alert_time = data.get("last_alert_time", {})
+                    self.alerted_events = {tuple(x) for x in data.get("alerted_events", [])}
+                    logger.info(f"成功載入今日雷達推播狀態: {self.alert_counts}")
+            except Exception as e:
+                logger.warning(f"讀取雷達狀態檔失敗: {e}")
+
+    def _save_daily_state(self) -> None:
+        """儲存當日推播狀態至本地快取檔。"""
+        if not self.persist_state:
+            return
+        state_file = self._get_state_file_path()
+        try:
+            data = {
+                "date": date.today().strftime("%Y-%m-%d"),
+                "alert_counts": self.alert_counts,
+                "last_alert_time": self.last_alert_time,
+                "alerted_events": [list(x) for x in self.alerted_events],
+            }
+            state_file.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+        except Exception as e:
+            logger.warning(f"儲存雷達狀態檔失敗: {e}")
 
     def load_targets(self, as_of_date: Optional[date] = None) -> dict[str, RadarTarget]:
         """計算所有監控標的的前置雷達門檻數值（基於昨日以前之歷史數據）。"""
@@ -154,7 +216,6 @@ class LiveEntryRadar:
                     continue
 
                 z = it.get("z")
-                # 盤前或暫無成交價時，嘗試取試撮買賣價或昨收價
                 if z == "-" or not z:
                     bids = it.get("b", "_").split("_")
                     z = bids[0] if bids and bids[0] != "" else it.get("y")
@@ -187,21 +248,37 @@ class LiveEntryRadar:
 
     def check_and_alert(self, quotes: dict[str, RealtimeQuote], send_telegram: bool = True) -> list[dict]:
         """
-        核心進場訊號檢測：比對即時報價與策略門檻，一旦觸及立即發送急報。
+        核心進場訊號檢測：比對即時報價與策略門檻，碰觸立即發送急報。
+        嚴格套用：
+        1. 單一標的每日推播上限 5 次（滿 5 次後自動靜默，絕不重複洗版）。
+        2. 推播冷卻時間（預設 3 分鐘），避免短時間內密集震盪連續推播。
         """
         triggered_signals = []
+        now_ts = time.time()
 
         for stock, q in quotes.items():
             t = self.targets.get(stock)
             if not t:
                 continue
 
+            # 檢查是否已達每日 5 次通知上限
+            current_count = self.alert_counts.get(stock, 0)
+            if current_count >= self.max_alerts_per_stock:
+                logger.info(f"[{stock}] 今日已達推播上限 ({self.max_alerts_per_stock} 次)，保持靜默休息")
+                continue
+
+            # 檢查冷卻時間（至少需間隔 cooldown_seconds 秒）
+            last_ts = self.last_alert_time.get(stock, 0.0)
+            if (now_ts - last_ts) < self.cooldown_seconds:
+                continue
+
             bias = ((q.current_price - t.ma60) / t.ma60) * 100.0
+            candidate_sig = None
 
             # 1. 🚀 右側突破訊號：盤中最高價或現價觸及突破門檻
             is_breakout = (q.high_price >= t.roll_20_h or q.current_price >= t.roll_20_h)
             if is_breakout and (stock, "breakout") not in self.alerted_events:
-                sig = {
+                candidate_sig = {
                     "stock": stock,
                     "name": q.name,
                     "event_key": "breakout",
@@ -213,15 +290,11 @@ class LiveEntryRadar:
                     "bias": bias,
                     "time": q.trade_time,
                 }
-                triggered_signals.append(sig)
                 self.alerted_events.add((stock, "breakout"))
-                if send_telegram:
-                    self._send_instant_alert(sig)
 
             # 2. 🎯 第一梯隊：季線回踩抄底區 (MA60 -2% ~ +1%)
-            is_pullback = (q.low_price <= t.pullback_max_p and q.current_price >= t.pullback_min_p * 0.98)
-            if is_pullback and (stock, "pullback") not in self.alerted_events:
-                sig = {
+            elif (q.low_price <= t.pullback_max_p and q.current_price >= t.pullback_min_p * 0.98) and (stock, "pullback") not in self.alerted_events:
+                candidate_sig = {
                     "stock": stock,
                     "name": q.name,
                     "event_key": "pullback",
@@ -233,15 +306,11 @@ class LiveEntryRadar:
                     "bias": bias,
                     "time": q.trade_time,
                 }
-                triggered_signals.append(sig)
                 self.alerted_events.add((stock, "pullback"))
-                if send_telegram:
-                    self._send_instant_alert(sig)
 
             # 3. 🌟 第二梯隊：波段黃金拉回區 (-8% ~ -10%)
-            is_tier2 = (q.low_price <= t.tier2_max_p and q.current_price >= t.tier2_min_p * 0.98)
-            if is_tier2 and (stock, "tier2") not in self.alerted_events:
-                sig = {
+            elif (q.low_price <= t.tier2_max_p and q.current_price >= t.tier2_min_p * 0.98) and (stock, "tier2") not in self.alerted_events:
+                candidate_sig = {
                     "stock": stock,
                     "name": q.name,
                     "event_key": "tier2",
@@ -253,15 +322,11 @@ class LiveEntryRadar:
                     "bias": bias,
                     "time": q.trade_time,
                 }
-                triggered_signals.append(sig)
                 self.alerted_events.add((stock, "tier2"))
-                if send_telegram:
-                    self._send_instant_alert(sig)
 
             # 4. 🛡️ 第三梯隊：極度恐慌超跌底 (季線負乖離 <= -6%)
-            is_panic = (q.low_price <= t.capitulation_p)
-            if is_panic and (stock, "panic") not in self.alerted_events:
-                sig = {
+            elif (q.low_price <= t.capitulation_p) and (stock, "panic") not in self.alerted_events:
+                candidate_sig = {
                     "stock": stock,
                     "name": q.name,
                     "event_key": "panic",
@@ -273,10 +338,20 @@ class LiveEntryRadar:
                     "bias": bias,
                     "time": q.trade_time,
                 }
-                triggered_signals.append(sig)
                 self.alerted_events.add((stock, "panic"))
+
+            # 若觸發訊號，更新計數並發送推播
+            if candidate_sig:
+                new_count = current_count + 1
+                self.alert_counts[stock] = new_count
+                self.last_alert_time[stock] = now_ts
+                candidate_sig["alert_index"] = new_count
+                candidate_sig["max_alerts"] = self.max_alerts_per_stock
+                self._save_daily_state()
+
+                triggered_signals.append(candidate_sig)
                 if send_telegram:
-                    self._send_instant_alert(sig)
+                    self._send_instant_alert(candidate_sig)
 
         return triggered_signals
 
@@ -286,6 +361,17 @@ class LiveEntryRadar:
         diff = sig['current'] - sig['target']
         diff_str = f"+{diff:.2f}" if diff >= 0 else f"{diff:.2f}"
 
+        count_str = f"🔔 <b>今日通知次數</b>：第 <b>{sig.get('alert_index', 1)}</b> 次 / 上限 {sig.get('max_alerts', self.max_alerts_per_stock)} 次"
+
+        # 若已達最後一次上限，附帶防打擾提醒
+        limit_note = ""
+        if sig.get("alert_index", 1) >= sig.get("max_alerts", self.max_alerts_per_stock):
+            limit_note = (
+                f"\n\n🛑 <b>防頻繁提醒保護已啟動</b>：\n"
+                f"今日 {sig['stock']} 進場急報已達 <b>{self.max_alerts_per_stock} 次上限</b>！\n"
+                f"為避免盤中過於頻繁干擾，今日盤中將自動進入靜默防打擾模式。13:35 收盤將為您發送完整盤後總結！"
+            )
+
         msg = (
             f"🚨 <b>【{sig['stock']} {sig['name']} 盤中進場急報】</b>\n\n"
             f"⚡ <b>觸發訊號：{sig['title']}</b>\n"
@@ -293,15 +379,17 @@ class LiveEntryRadar:
             f"• 策略門檻價：<b>${sig['target']:.2f} 元</b> (差距 {diff_str} 元)\n"
             f"• 季線 MA60：${sig['ma60']:.2f} 元 (乖離 {sig['bias']:+.2f}%)\n"
             f"• 撮合時間：<b>{sig['time']} (盤中即時)</b>\n"
-            f"• 觸發詳情：{sig['detail']}\n\n"
+            f"• 觸發詳情：{sig['detail']}\n"
+            f"• {count_str}\n\n"
             f"💡 <b>操作提醒</b>：\n"
             f"策略金額已於盤中觸碰！請檢視盤面確認量價守穩狀況，依紀律進場並落實停損防守！\n"
             f"👉 <a href='{quote_url}'>點此查看 {sig['stock']} Yahoo 即時盤面</a>"
+            f"{limit_note}"
         )
 
         if self.notifier:
             self.notifier.send(msg)
-            logger.info(f"已發送 Telegram 盤中即時通知: {sig['stock']} {sig['event_key']}")
+            logger.info(f"已發送 Telegram 盤中即時通知: {sig['stock']} {sig['event_key']} (第 {sig.get('alert_index', 1)} 次)")
 
         # macOS 桌面即時橫幅通知
         if platform.system() == "Darwin":
@@ -332,6 +420,7 @@ class LiveEntryRadar:
             quote_url = f"https://tw.stock.yahoo.com/quote/{stock}.TW"
             dist_bo = t.roll_20_h - q.current_price
             bo_status = "🚨 <b>今日已突破！</b>" if q.high_price >= t.roll_20_h else f"差 {dist_bo:+.2f} 元"
+            alert_cnt = self.alert_counts.get(stock, 0)
 
             lines.append(
                 f"📊 <b>{stock} {q.name}</b>\n"
@@ -340,18 +429,19 @@ class LiveEntryRadar:
                 f"• 🚀 20日突破線：<b>${t.roll_20_h:.2f} 元</b> (現況: {bo_status})\n"
                 f"• 🎯 季線回踩區：${t.pullback_min_p:.2f} ~ ${t.pullback_max_p:.2f} 元 (季線 ${t.ma60:.2f})\n"
                 f"• 🌟 黃金拉回區：${t.tier2_min_p:.2f} ~ ${t.tier2_max_p:.2f} 元\n"
+                f"• 🔔 盤中提醒次數：共發送 {alert_cnt} 次急報\n"
             )
 
-        lines.append("☕ <b>監控狀態</b>：今日交易已結束，明日開盤 09:00 將自動恢復即時盯盤！")
+        lines.append("☕ <b>監控狀態</b>：今日交易已結束，明日開盤 08:50 將自動恢復即時盯盤！")
         summary_msg = "\n".join(lines)
         self.notifier.send(summary_msg)
         logger.info("已發送今日收盤總結推播")
 
     def run_daemon(self, max_duration_hours: float = 5.0) -> None:
         """
-        常駐守護執行緒：在台股交易時段 (09:00 ~ 13:35) 每隔 poll_interval 秒即時巡檢。
+        常駐守護執行緒：在台股交易時段 (08:58 ~ 13:35) 每隔 poll_interval 秒即時巡檢。
         """
-        logger.info(f"啟動盤中實時雷達守護行程 (標的: {self.stocks}, 間隔: {self.poll_interval}s)")
+        logger.info(f"啟動盤中實時雷達守護行程 (標的: {self.stocks}, 間隔: {self.poll_interval}s, 上限: {self.max_alerts_per_stock}次)")
         self.load_targets()
 
         start_time = time.time()
@@ -360,7 +450,6 @@ class LiveEntryRadar:
 
         while True:
             now = datetime.now()
-            # 台灣時間小時與分鐘
             cur_time_int = now.hour * 100 + now.minute
 
             # 若已過 13:35（收盤結算時間）
