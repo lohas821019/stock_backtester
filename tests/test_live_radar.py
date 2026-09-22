@@ -156,8 +156,16 @@ def test_live_radar_state_persistence(tmp_path):
         )
     }
 
+    # send_telegram=False → 純預覽模式：不更新計數、不儲存狀態、不消耗 alerted_events
     radar1.check_and_alert(quotes, send_telegram=False)
+    assert "0050" not in radar1.alert_counts  # 預覽模式不更新計數
+    assert ("0050", "breakout") not in radar1.alerted_events  # 預覽模式不標記事件
+    assert not state_file.exists()  # 預覽模式不寫狀態檔
+
+    # send_telegram=True → 正式發送：更新計數、儲存狀態、標記事件
+    radar1.check_and_alert(quotes, send_telegram=True)
     assert radar1.alert_counts["0050"] == 1
+    assert ("0050", "breakout") in radar1.alerted_events
     assert state_file.exists()
 
     # Create new radar instance pointing to the same state file

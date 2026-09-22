@@ -577,7 +577,7 @@ def cmd_watch_entry(ctx, stock, notify, summary, intraday):
 @click.option("--stocks", "-s", default="0050,0052", help="股票代號清單（逗號分隔，預設：0050,0052）")
 @click.option("--notify/--no-notify", default=True, help="是否發送 Telegram 即時急報（預設開啟）")
 @click.option("--summary/--no-summary", default=True, help="收盤時是否發送今日總結（預設開啟）")
-@click.option("--interval", default=25, type=int, help="盤中輪詢間隔秒數（預設 25 秒）")
+@click.option("--interval", default=60, type=int, help="盤中輪詢間隔秒數（預設 60 秒）")
 @click.option("--max-alerts", default=5, type=int, help="單檔標的每日盤中最大推播次數（預設 5 次，滿 5 次自動靜默）")
 @click.option("--cooldown", default=180, type=int, help="相同標的兩次推播間隔冷卻秒數（預設 180 秒，防止短時間密集洗版）")
 @click.option("--daemon/--once", default=False, help="模式：--daemon 常駐即時監控直到收盤；--once 僅執行單次檢測")
@@ -666,15 +666,27 @@ def cmd_watch_live(ctx, stocks, notify, summary, interval, max_alerts, cooldown,
 
     console.print(table)
 
-    # 檢測當前狀態並推播
-    signals = radar.check_and_alert(quotes, send_telegram=notify)
+    # ── 預覽目前狀態（僅顯示，不發送 Telegram、不消耗推播額度）──
+    # 注意：send_telegram=False 確保此次預覽不會佔用 alerted_events，
+    # 避免 daemon 模式啟動後因事件已被標記而永遠無法再觸發盤中訊號。
+    signals = radar.check_and_alert(quotes, send_telegram=False)
     if signals:
         for sig in signals:
-            console.print(f"[bold green]🚨 觸發買訊: {sig['stock']} {sig['title']} (第 {sig.get('alert_index')} 次)[/bold green]")
+            console.print(f"[bold green]🚨 目前狀態已達觸發條件: {sig['stock']} {sig['title']}（Daemon 模式下將正式發送推播）[/bold green]")
     else:
         console.print("[dim]目前無新觸發訊號，維持觀望。[/dim]")
 
     if daemon:
+        # 設定 INFO 級別 logging 讓 daemon 過程中 log 可見
+        logging.getLogger("stock_backtester").setLevel(logging.INFO)
+        if not any(
+            isinstance(h, logging.StreamHandler) for h in logging.getLogger().handlers
+        ):
+            logging.basicConfig(
+                level=logging.INFO,
+                format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+            )
+
         console.print(f"[bold green]⚡ 進入常駐巡檢守護模式（每 {interval} 秒檢查一次，持續至 13:35 收盤）...[/bold green]")
         console.print("[dim]提示：按 Ctrl+C 可隨時中止常駐監控。[/dim]")
         try:

@@ -47,7 +47,7 @@ jobs:
             echo "📊 收盤結算時段：執行收盤大總結推播..."
             python -m stock_backtester.cli watch-live --stocks 0050,0052 --notify --summary --once
           else
-            echo "⚡ 盤中交易時段：啟動連續即時盯盤守護行程（每 25 秒巡檢，碰價即刻發送 Telegram 急報，每日上限 5 次）..."
-            python -m stock_backtester.cli watch-live --stocks 0050,0052 --notify --summary --interval 25 --max-alerts 5 --cooldown 180 --daemon
+            echo "⚡ 盤中交易時段：啟動連續即時盯盤守護行程（每 60 秒巡檢，碰價即刻發送 Telegram 急報，每日上限 5 次）..."
+            python -m stock_backtester.cli watch-live --stocks 0050,0052 --notify --summary --interval 60 --max-alerts 5 --cooldown 180 --daemon
           fi
 
