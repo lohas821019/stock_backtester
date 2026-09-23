@@ -15,9 +15,10 @@ import platform
 import subprocess
 import time
 from dataclasses import dataclass, field
-from datetime import date, datetime, timedelta
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from typing import Optional
+from zoneinfo import ZoneInfo
 
 import pandas as pd
 import requests
@@ -26,6 +27,9 @@ from ..data.data_manager import DataManager
 from ..notifiers.telegram_notifier import TelegramNotifier
 
 logger = logging.getLogger(__name__)
+
+# 統一使用台灣時區，確保 GitHub Actions (UTC) 與本地 Mac (UTC+8) 行為一致
+TW_TZ = ZoneInfo("Asia/Taipei")
 
 
 @dataclass
@@ -106,7 +110,7 @@ class LiveEntryRadar:
     def _get_state_file_path(self) -> Path:
         if self.state_file:
             return self.state_file
-        today_str = date.today().strftime("%Y%m%d")
+        today_str = datetime.now(tz=TW_TZ).date().strftime("%Y%m%d")
         home_dir = Path.home() / ".stock_backtester"
         try:
             home_dir.mkdir(parents=True, exist_ok=True)
@@ -122,7 +126,7 @@ class LiveEntryRadar:
         if state_file.exists():
             try:
                 data = json.loads(state_file.read_text(encoding="utf-8"))
-                if data.get("date") == date.today().strftime("%Y-%m-%d"):
+                if data.get("date") == datetime.now(tz=TW_TZ).date().strftime("%Y-%m-%d"):
                     self.alert_counts = data.get("alert_counts", {})
                     self.last_alert_time = data.get("last_alert_time", {})
                     self.alerted_events = {tuple(x) for x in data.get("alerted_events", [])}
@@ -137,7 +141,7 @@ class LiveEntryRadar:
         state_file = self._get_state_file_path()
         try:
             data = {
-                "date": date.today().strftime("%Y-%m-%d"),
+                "date": datetime.now(tz=TW_TZ).date().strftime("%Y-%m-%d"),
                 "alert_counts": self.alert_counts,
                 "last_alert_time": self.last_alert_time,
                 "alerted_events": [list(x) for x in self.alerted_events],
@@ -148,7 +152,7 @@ class LiveEntryRadar:
 
     def load_targets(self, as_of_date: Optional[date] = None) -> dict[str, RadarTarget]:
         """計算所有監控標的的前置雷達門檻數值（基於昨日以前之歷史數據）。"""
-        ref_date = as_of_date or date.today()
+        ref_date = as_of_date or datetime.now(tz=TW_TZ).date()
         start_d = ref_date - timedelta(days=260)
         end_d = ref_date
 
@@ -227,7 +231,7 @@ class LiveEntryRadar:
                 low_p = float(it.get("l")) if it.get("l") and it.get("l") != "-" else cur_p
                 yest_p = float(it.get("y")) if it.get("y") and it.get("y") != "-" else cur_p
                 vol = int(it.get("v", 0)) if it.get("v") and it.get("v") != "-" else 0
-                t_str = it.get("t", datetime.now().strftime("%H:%M:%S"))
+                t_str = it.get("t", datetime.now(tz=TW_TZ).strftime("%H:%M:%S"))
                 d_str = it.get("d", "")
                 name = it.get("n", self.STOCK_NAMES.get(sym, sym))
 
@@ -265,7 +269,7 @@ class LiveEntryRadar:
         """
         triggered_signals = []
         now_ts = time.time()
-        today_str = date.today().strftime("%Y%m%d")
+        today_str = datetime.now(tz=TW_TZ).date().strftime("%Y%m%d")
 
         for stock, q in quotes.items():
             t = self.targets.get(stock)
@@ -479,7 +483,7 @@ class LiveEntryRadar:
         if not self.notifier:
             return
 
-        today_str = date.today().strftime("%Y-%m-%d")
+        today_str = datetime.now(tz=TW_TZ).date().strftime("%Y-%m-%d")
         lines = [
             f"☀️ <b>【09:00 盤中實時雷達上線打卡】</b> ({today_str})\n",
             f"雲端守護行程已正常啟動！台股已正式開盤，今日為您實時盯盤：\n",
@@ -509,7 +513,7 @@ class LiveEntryRadar:
         if not self.notifier:
             return
 
-        today_str = date.today().strftime("%Y-%m-%d")
+        today_str = datetime.now(tz=TW_TZ).date().strftime("%Y-%m-%d")
         lines = [f"🏁 <b>【0050 / 0052 今日收盤雷達總結 ({today_str})】</b>\n"]
 
         for stock, q in quotes.items():
@@ -548,7 +552,7 @@ class LiveEntryRadar:
         常駐守護執行緒：在台股交易時段 (09:00 ~ 13:35) 每隔 poll_interval 秒即時巡檢。
         08:50 ~ 08:59 盤前靜默準備，09:00 開盤正式啟動並發送打卡。
         """
-        now_start = datetime.now()
+        now_start = datetime.now(tz=TW_TZ)
         cur_time_int_start = now_start.hour * 100 + now_start.minute
         logger.info(
             f"啟動盤中實時雷達守護行程 | 標的: {self.stocks} | 間隔: {self.poll_interval}s | "
@@ -573,7 +577,7 @@ class LiveEntryRadar:
         heartbeat_sent = False
 
         while True:
-            now = datetime.now()
+            now = datetime.now(tz=TW_TZ)
             cur_time_int = now.hour * 100 + now.minute
 
             # 若已過 13:35（收盤結算時間）→ 發收盤總結後結束
