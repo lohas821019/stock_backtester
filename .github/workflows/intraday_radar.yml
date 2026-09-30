@@ -1,23 +1,36 @@
 name: 0050 / 0052 盤中實時進場雷達 (Live Intraday Radar)
 
+# ────────────────────────────────────────────────────────────
+# 架構說明：
+#   採用「高頻短任務」模式，每 5 分鐘觸發一次獨立的單次檢測，
+#   取代原本的「單一 daemon 常駐 5 小時」模式。
+#
+#   原因：GitHub Actions cron 為「盡力而為」(best-effort)，
+#   對 UTC 凌晨時段（台灣早盤 08:50~09:05）的排程可靠性極低，
+#   歷史記錄顯示 08:50 / 09:05 的 cron 觸發率為 0%。
+#
+#   改為每 5 分鐘短任務後：
+#   - 即使偶爾被跳過，5 分鐘後又會重試
+#   - 每次僅執行 1~2 分鐘，不長時間佔用 runner
+#   - 狀態透過 GitHub Actions Cache 跨次持久化
+# ────────────────────────────────────────────────────────────
+
 on:
   schedule:
-    # 台灣時間週一至週五 08:50 (UTC 00:50) 啟動實時盯盤守護行程（常駐巡檢至 13:35 收盤）
-    - cron: '50 0 * * 1-5'
-    # 備援啟動：09:05 (UTC 01:05)，防止 08:50 因 GitHub 排程隊列偶發延遲
-    - cron: '5 1 * * 1-5'
-    # 收盤大總結推播：13:38 (UTC 05:38)
-    - cron: '38 5 * * 1-5'
-  workflow_dispatch: # 支援在 GitHub 網頁上手動一鍵隨時啟動實時雷達
+    # 台灣時間 09:00~13:40 每 5 分鐘觸發 (UTC 01:00~05:40)
+    # 覆蓋：開盤打卡 (09:00)、盤中巡檢 (09:00~13:30)、收盤總結 (13:35)
+    - cron: '*/5 1-5 * * 1-5'
+  workflow_dispatch: # 支援在 GitHub 網頁上手動一鍵隨時啟動
 
 concurrency:
   group: intraday-radar-live
-  cancel-in-progress: false
+  cancel-in-progress: true  # 新的 run 直接取代舊的，避免排隊卡住
 
 jobs:
-  live-radar-daemon:
+  live-radar-check:
     runs-on: ubuntu-latest
-    timeout-minutes: 360 # 最長允許 6 小時 (盤中僅需 4.5 小時)
+    timeout-minutes: 5  # 單次檢測只需 1~2 分鐘
+
     steps:
       - name: 簽出專案代碼 (Checkout repository)
         uses: actions/checkout@v4
@@ -33,21 +46,27 @@ jobs:
           python -m pip install --upgrade pip
           pip install -e .
 
-      - name: 執行盤中實時雷達守護行程 (Run Live Intraday Radar Daemon)
+      - name: 還原今日雷達狀態快取 (Restore radar state)
+        uses: actions/cache/restore@v4
+        with:
+          path: ~/.stock_backtester
+          key: radar-state-will-not-match
+          restore-keys: |
+            radar-state-
+
+      - name: 執行盤中實時雷達單次檢測 (Run Live Radar - single check)
         env:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
         run: |
-          TW_HOUR=$(TZ=Asia/Taipei date +%H)
-          TW_MIN=$(TZ=Asia/Taipei date +%M)
-          echo "當前台灣時間: ${TW_HOUR}:${TW_MIN}"
-          
-          # 若為收盤時段 (13:35 之後)，發送收盤大總結
-          if [ "$TW_HOUR" -gt 13 ] || ([ "$TW_HOUR" -eq 13 ] && [ "$TW_MIN" -ge 35 ]); then
-            echo "📊 收盤結算時段：執行收盤大總結推播..."
-            python -m stock_backtester.cli watch-live --stocks 0050,0052 --notify --summary --once
-          else
-            echo "⚡ 盤中交易時段：啟動連續即時盯盤守護行程（每 60 秒巡檢，碰價即刻發送 Telegram 急報，每日上限 5 次）..."
-            python -m stock_backtester.cli watch-live --stocks 0050,0052 --notify --summary --interval 60 --max-alerts 5 --cooldown 180 --daemon
-          fi
+          TW_TIME=$(TZ=Asia/Taipei date '+%Y-%m-%d %H:%M:%S')
+          echo "🕐 當前台灣時間: ${TW_TIME}"
+          echo "⚡ 啟動單次檢測模式（自動根據時段執行開盤打卡/碰價檢測/收盤總結）..."
+          python -m stock_backtester.cli -v watch-live --stocks 0050,0052 --notify --summary --once
 
+      - name: 儲存今日雷達狀態快取 (Save radar state)
+        uses: actions/cache/save@v4
+        if: always()
+        with:
+          path: ~/.stock_backtester
+          key: radar-state-${{ github.run_id }}-${{ github.run_attempt }}

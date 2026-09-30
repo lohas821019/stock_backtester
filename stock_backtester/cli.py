@@ -666,17 +666,16 @@ def cmd_watch_live(ctx, stocks, notify, summary, interval, max_alerts, cooldown,
 
     console.print(table)
 
-    # ── 預覽目前狀態（僅顯示，不發送 Telegram、不消耗推播額度）──
-    # 注意：send_telegram=False 確保此次預覽不會佔用 alerted_events，
-    # 避免 daemon 模式啟動後因事件已被標記而永遠無法再觸發盤中訊號。
-    signals = radar.check_and_alert(quotes, send_telegram=False)
-    if signals:
-        for sig in signals:
-            console.print(f"[bold green]🚨 目前狀態已達觸發條件: {sig['stock']} {sig['title']}（Daemon 模式下將正式發送推播）[/bold green]")
-    else:
-        console.print("[dim]目前無新觸發訊號，維持觀望。[/dim]")
-
     if daemon:
+        # ── Daemon 模式：先預覽再進入常駐巡檢 ──
+        # send_telegram=False 確保預覽不佔用 alerted_events
+        signals = radar.check_and_alert(quotes, send_telegram=False)
+        if signals:
+            for sig in signals:
+                console.print(f"[bold green]🚨 目前狀態已達觸發條件: {sig['stock']} {sig['title']}（即將進入常駐模式正式推播）[/bold green]")
+        else:
+            console.print("[dim]目前無新觸發訊號，維持觀望。[/dim]")
+
         # 設定 INFO 級別 logging 讓 daemon 過程中 log 可見
         logging.getLogger("stock_backtester").setLevel(logging.INFO)
         if not any(
@@ -693,6 +692,24 @@ def cmd_watch_live(ctx, stocks, notify, summary, interval, max_alerts, cooldown,
             radar.run_daemon()
         except KeyboardInterrupt:
             console.print("\n[yellow]已手動停止盤中雷達守護行程。[/yellow]")
+    else:
+        # ── Once 模式：單次檢測，自動根據時段發送通知 ──
+        logging.getLogger("stock_backtester").setLevel(logging.INFO)
+        if not any(
+            isinstance(h, logging.StreamHandler) for h in logging.getLogger().handlers
+        ):
+            logging.basicConfig(
+                level=logging.INFO,
+                format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+            )
+
+        console.print("[bold cyan]⚡ 單次檢測模式（自動根據台灣時間執行對應動作）[/bold cyan]")
+        triggered = radar.run_once()
+        if triggered:
+            for sig in triggered:
+                console.print(f"[bold green]🚨 觸發訊號: {sig['stock']} {sig['title']}[/bold green]")
+        else:
+            console.print("[dim]本次檢測無新觸發訊號。[/dim]")
 
 
 if __name__ == "__main__":

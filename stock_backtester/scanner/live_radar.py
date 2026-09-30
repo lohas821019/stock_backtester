@@ -103,6 +103,8 @@ class LiveEntryRadar:
         self.last_alert_time: dict[str, float] = {}
         # 記錄已觸發過的特定訊號事件：{(symbol, "breakout"), ...}
         self.alerted_events: set[tuple[str, str]] = set()
+        # 每日旗標（開盤打卡已發送、收盤總結已發送等，用於 run_once 高頻短任務模式）
+        self.daily_flags: dict[str, bool] = {}
 
         if self.persist_state:
             self._load_daily_state()
@@ -130,7 +132,8 @@ class LiveEntryRadar:
                     self.alert_counts = data.get("alert_counts", {})
                     self.last_alert_time = data.get("last_alert_time", {})
                     self.alerted_events = {tuple(x) for x in data.get("alerted_events", [])}
-                    logger.info(f"成功載入今日雷達推播狀態: {self.alert_counts}")
+                    self.daily_flags = data.get("daily_flags", {})
+                    logger.info(f"成功載入今日雷達推播狀態: {self.alert_counts} flags={self.daily_flags}")
             except Exception as e:
                 logger.warning(f"讀取雷達狀態檔失敗: {e}")
 
@@ -145,6 +148,7 @@ class LiveEntryRadar:
                 "alert_counts": self.alert_counts,
                 "last_alert_time": self.last_alert_time,
                 "alerted_events": [list(x) for x in self.alerted_events],
+                "daily_flags": self.daily_flags,
             }
             state_file.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
         except Exception as e:
@@ -547,6 +551,99 @@ class LiveEntryRadar:
         self.notifier.send(summary_msg, silent=True)
         logger.info("已發送今日收盤總結推播 (靜音模式)")
 
+    def send_startup_notification(self) -> None:
+        """
+        守護行程剛喚醒啟動通知（以靜音推播發送）。
+        讓使用者在 08:55 守護行程一剛喚醒時，立刻得知系統已就緒並準備盯盤。
+        """
+        if not self.notifier:
+            return
+
+        now_str = datetime.now(tz=TW_TZ).strftime("%H:%M:%S")
+        today_str = datetime.now(tz=TW_TZ).date().strftime("%Y-%m-%d")
+        stock_names = [f"{s} {self.targets[s].name}" if s in self.targets else s for s in self.stocks]
+        stocks_display = "、".join(stock_names)
+
+        msg = (
+            f"🚀 <b>【台股實時雷達守護行程已喚醒】</b>\n\n"
+            f"• 喚醒時間：<b>{now_str}</b> ({today_str})\n"
+            f"• 監控標的：<b>{stocks_display}</b>\n"
+            f"• 運行狀態：系統已喚醒，完成策略門檻載入，準備盯盤！\n"
+            f"• 流程說明：09:00 開盤將發送點位打卡，盤中碰價將第一時間即刻推播。"
+        )
+        self.notifier.send(msg, silent=True)
+        logger.info("已發送守護行程喚醒通知 (靜音模式)")
+
+    def run_once(self) -> list[dict]:
+        """
+        單次檢測模式：根據當前台灣時間自動執行對應動作。
+
+        適用於 GitHub Actions 高頻短任務排程（每 5 分鐘觸發一次），
+        取代原本需要常駐 5 小時的 daemon 模式，大幅提升排程可靠性。
+
+        時段判定：
+        - < 09:00：盤前，僅載入門檻
+        - 09:00~13:34：盤中，發送開盤打卡（首次）+ 碰價檢測
+        - >= 13:35：收盤，發送總結（首次）
+
+        所有狀態（推播次數、冷卻時間、已觸發事件、每日旗標）
+        透過 daily_state JSON 檔案持久化，確保跨次執行狀態一致。
+        """
+        now = datetime.now(tz=TW_TZ)
+        cur_time_int = now.hour * 100 + now.minute
+        logger.info(
+            f"[run_once] 啟動單次檢測 | 台灣時間: {now.strftime('%H:%M:%S')} "
+            f"(int={cur_time_int}) | 標的: {self.stocks}"
+        )
+
+        if not self.targets:
+            self.load_targets()
+
+        if not self.targets:
+            logger.warning("[run_once] 無法載入任何標的門檻，跳過本次檢測")
+            return []
+
+        # ── 盤前時段 (< 09:00) ──
+        if cur_time_int < 900:
+            logger.info(f"[run_once] 盤前時段 ({now.strftime('%H:%M')})，門檻已載入，等待開盤")
+            return []
+
+        # ── 收盤時段 (>= 13:35) ──
+        if cur_time_int >= 1335:
+            if not self.daily_flags.get("summary_sent"):
+                logger.info("[run_once] 收盤時段，發送今日收盤總結")
+                quotes = self.fetch_quotes()
+                if quotes:
+                    self.send_closing_summary(quotes)
+                    self.daily_flags["summary_sent"] = True
+                    self._save_daily_state()
+            else:
+                logger.info("[run_once] 收盤總結已發送過，跳過")
+            return []
+
+        # ── 盤中時段 (09:00 ~ 13:34) ──
+        # 開盤打卡（每日第一次盤中執行時發送）
+        if not self.daily_flags.get("heartbeat_sent"):
+            logger.info("[run_once] 首次盤中執行，發送 09:00 開盤打卡")
+            quotes = self.fetch_quotes()
+            self.send_morning_heartbeat(quotes)
+            self.daily_flags["heartbeat_sent"] = True
+            self._save_daily_state()
+
+        # 碰價檢測
+        quotes = self.fetch_quotes()
+        triggered: list[dict] = []
+        if quotes:
+            triggered = self.check_and_alert(quotes, send_telegram=True)
+            if triggered:
+                logger.info(f"[run_once] 本次觸發 {len(triggered)} 個訊號")
+            else:
+                logger.info("[run_once] 本次無觸發訊號")
+        else:
+            logger.warning("[run_once] fetch_quotes 回傳空，可能為網路或 API 問題")
+
+        return triggered
+
     def run_daemon(self, max_duration_hours: float = 5.0) -> None:
         """
         常駐守護執行緒：在台股交易時段 (09:00 ~ 13:35) 每隔 poll_interval 秒即時巡檢。
@@ -570,6 +667,10 @@ class LiveEntryRadar:
             return
 
         self.load_targets()
+
+        # 08:55 守護行程剛喚醒（開盤前啟動）即刻發送喚醒準備通知
+        if cur_time_int_start < 900:
+            self.send_startup_notification()
 
         start_time = time.time()
         max_seconds = max_duration_hours * 3600
