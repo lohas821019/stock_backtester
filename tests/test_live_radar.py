@@ -286,4 +286,111 @@ def test_telegram_notifier_silent_payload():
         assert call_kwargs["json"]["disable_notification"] is True
 
 
+def test_live_radar_startup_notification_silent():
+    notifier = MagicMock()
+    radar = LiveEntryRadar(stocks=["0050"], notifier=notifier, persist_state=False, cooldown_seconds=0)
+    radar.targets["0050"] = RadarTarget(
+        symbol="0050",
+        name="元大台灣50",
+        roll_20_h=110.75,
+        ma60=104.96,
+        pullback_min_p=102.86,
+        pullback_max_p=106.01,
+        tier2_min_p=99.67,
+        tier2_max_p=101.89,
+        capitulation_p=98.66,
+    )
 
+    radar.send_startup_notification()
+    assert notifier.send.called
+    args, kwargs = notifier.send.call_args
+    assert kwargs.get("silent") is True
+    assert "台股實時雷達守護行程已喚醒" in args[0]
+    assert "準備盯盤" in args[0]
+
+
+
+
+
+def _make_radar_with_target(notifier):
+    radar = LiveEntryRadar(stocks=["0050"], notifier=notifier, persist_state=False, cooldown_seconds=0)
+    radar.targets["0050"] = RadarTarget(
+        symbol="0050",
+        name="元大台灣50",
+        roll_20_h=110.75,
+        ma60=104.96,
+        pullback_min_p=102.86,
+        pullback_max_p=106.01,
+        tier2_min_p=99.67,
+        tier2_max_p=101.89,
+        capitulation_p=98.66,
+    )
+    return radar
+
+
+def _quote():
+    return {
+        "0050": RealtimeQuote(
+            symbol="0050", name="元大台灣50", trade_time="13:30:00",
+            current_price=108.0, open_price=107.0, high_price=108.5,
+            low_price=106.8, yesterday_close=107.0, volume=10000,
+        )
+    }
+
+
+def test_morning_heartbeat_on_time_has_no_delay_warning():
+    from datetime import datetime
+    from stock_backtester.scanner.live_radar import TW_TZ
+
+    notifier = MagicMock()
+    radar = _make_radar_with_target(notifier)
+    radar.send_morning_heartbeat(now=datetime(2026, 10, 5, 9, 2, 0, tzinfo=TW_TZ))
+    msg = notifier.send.call_args[0][0]
+    assert "實際上線時間：<b>09:02:00</b>" in msg
+    assert "排程延遲" not in msg
+
+
+def test_morning_heartbeat_late_shows_delay_warning():
+    from datetime import datetime
+    from stock_backtester.scanner.live_radar import TW_TZ
+
+    notifier = MagicMock()
+    radar = _make_radar_with_target(notifier)
+    radar.send_morning_heartbeat(now=datetime(2026, 10, 5, 11, 30, 0, tzinfo=TW_TZ))
+    msg = notifier.send.call_args[0][0]
+    assert "排程延遲約 150 分鐘" in msg
+
+
+def test_run_once_closing_summary_flags_missed_radar():
+    from datetime import datetime
+    from stock_backtester.scanner.live_radar import TW_TZ
+
+    notifier = MagicMock()
+    radar = _make_radar_with_target(notifier)
+    fake_now = datetime(2026, 10, 5, 14, 24, 0, tzinfo=TW_TZ)
+    with patch("stock_backtester.scanner.live_radar.datetime") as mock_dt, \
+         patch.object(radar, "fetch_quotes", return_value=_quote()):
+        mock_dt.now.return_value = fake_now
+        radar.run_once()
+
+    msg = notifier.send.call_args[0][0]
+    assert "今日盤中雷達未能上線" in msg
+    assert radar.daily_flags.get("summary_sent") is True
+
+
+def test_run_once_closing_summary_normal_when_heartbeat_sent():
+    from datetime import datetime
+    from stock_backtester.scanner.live_radar import TW_TZ
+
+    notifier = MagicMock()
+    radar = _make_radar_with_target(notifier)
+    radar.daily_flags["heartbeat_sent"] = True
+    fake_now = datetime(2026, 10, 5, 13, 40, 0, tzinfo=TW_TZ)
+    with patch("stock_backtester.scanner.live_radar.datetime") as mock_dt, \
+         patch.object(radar, "fetch_quotes", return_value=_quote()):
+        mock_dt.now.return_value = fake_now
+        radar.run_once()
+
+    msg = notifier.send.call_args[0][0]
+    assert "今日盤中雷達未能上線" not in msg
+    assert "收盤雷達總結" in msg

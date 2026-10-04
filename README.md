@@ -70,6 +70,26 @@ python3 -m pip install -e ".[sinopac]"
 #    並取消 TODO 區塊的 pass/raise 即可啟用
 ```
 
+## 盤中雷達外部排程（準時觸發）
+
+GitHub Actions 的 `schedule` 是 best-effort，實測早盤觸發率為 0%（延遲數小時或直接丟棄），
+因此 `intraday_radar.yml` 改以外部排程器呼叫 `workflow_dispatch` 作為主要觸發來源（通常數秒內執行）。
+
+1. **建立 GitHub Fine-grained PAT**：GitHub → Settings → Developer settings → Fine-grained tokens
+   - Repository access：只選 `stock_backtester`
+   - Permissions：`Actions: Read and write`（其餘不需要）
+2. **建立 cron-job.org 任務**（免費）：
+   - URL：`https://api.github.com/repos/lohas821019/stock_backtester/actions/workflows/intraday_radar.yml/dispatches`
+   - Method：`POST`，Body：`{"ref":"main"}`
+   - Headers：
+     - `Authorization: Bearer <你的 PAT>`
+     - `Accept: application/vnd.github+json`
+     - `X-GitHub-Api-Version: 2022-11-28`
+   - Schedule（時區選 `Asia/Taipei`）：週一～週五，09:00～13:40 每 5 分鐘
+3. **驗證**：`gh run list --workflow=intraday_radar.yml -L 10`，事件應為 `workflow_dispatch` 且時間與排程一致。
+
+若當天盤中完全沒跑到，收盤總結會出現「⚠️ 今日盤中雷達未能上線」；若打卡晚於 09:10，會標示延遲分鐘數。
+
 ## 專案結構
 
 ```

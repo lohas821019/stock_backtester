@@ -31,6 +31,9 @@ logger = logging.getLogger(__name__)
 # 統一使用台灣時區，確保 GitHub Actions (UTC) 與本地 Mac (UTC+8) 行為一致
 TW_TZ = ZoneInfo("Asia/Taipei")
 
+# 開盤打卡若晚於此時間 (HHMM) 才送出，視為排程延遲並在訊息中警示
+HEARTBEAT_LATE_THRESHOLD = 910
+
 
 @dataclass
 class RadarTarget:
@@ -479,19 +482,33 @@ class LiveEntryRadar:
             except Exception:
                 pass
 
-    def send_morning_heartbeat(self, quotes: Optional[dict[str, RealtimeQuote]] = None) -> None:
+    def send_morning_heartbeat(
+        self,
+        quotes: Optional[dict[str, RealtimeQuote]] = None,
+        now: Optional[datetime] = None,
+    ) -> None:
         """
         早晨 09:00 開盤安心打卡通知（以靜音推播發送，手機不震動響鈴）。
         讓上班族一早確認雲端伺服器正常上線，並一覽今日所有監控門檻。
+
+        若實際送出時間晚於 HEARTBEAT_LATE_THRESHOLD（09:10），代表排程觸發延遲，
+        會在訊息中加註延遲分鐘數，避免延遲被默默吞掉。
         """
         if not self.notifier:
             return
 
-        today_str = datetime.now(tz=TW_TZ).date().strftime("%Y-%m-%d")
+        now = now or datetime.now(tz=TW_TZ)
+        today_str = now.date().strftime("%Y-%m-%d")
         lines = [
             f"☀️ <b>【09:00 盤中實時雷達上線打卡】</b> ({today_str})\n",
-            f"雲端守護行程已正常啟動！台股已正式開盤，今日為您實時盯盤：\n",
+            f"• 實際上線時間：<b>{now.strftime('%H:%M:%S')}</b>\n",
         ]
+        delay_min = (now.hour * 60 + now.minute) - 9 * 60
+        if now.hour * 100 + now.minute > HEARTBEAT_LATE_THRESHOLD:
+            lines.append(
+                f"⚠️ <b>排程延遲約 {delay_min} 分鐘</b>：09:00 ~ {now.strftime('%H:%M')} 期間未監控，請留意排程觸發來源。\n"
+            )
+        lines.append("雲端守護行程已正常啟動！台股已正式開盤，今日為您實時盯盤：\n")
         for stock in self.stocks:
             t = self.targets.get(stock)
             if not t:
@@ -512,8 +529,13 @@ class LiveEntryRadar:
         self.notifier.send(msg, silent=True)
         logger.info("已發送早晨 09:00 開盤打卡通知 (靜音模式)")
 
-    def send_closing_summary(self, quotes: dict[str, RealtimeQuote]) -> None:
-        """發送每日收盤大總結推播（以靜音模式發送，不干擾午休或下午開會）。"""
+    def send_closing_summary(self, quotes: dict[str, RealtimeQuote], radar_missed: bool = False) -> None:
+        """
+        發送每日收盤大總結推播（以靜音模式發送，不干擾午休或下午開會）。
+
+        radar_missed=True 時代表今日盤中從未成功執行（開盤打卡未發送），
+        會在總結中加註警示，避免排程失效時無聲失敗。
+        """
         if not self.notifier:
             return
 
@@ -545,7 +567,12 @@ class LiveEntryRadar:
                 f"• 🔔 盤中提醒次數：共發送 {alert_cnt} 次急報\n"
             )
 
-        lines.append("☕ <b>監控狀態</b>：今日交易已結束，明日開盤 08:50 將自動恢復即時盯盤！")
+        if radar_missed:
+            lines.append(
+                "⚠️ <b>今日盤中雷達未能上線</b>：09:00 ~ 13:30 期間排程未觸發，"
+                "盤中碰價未被監控。請檢查外部排程器 / GitHub Actions 觸發紀錄。\n"
+            )
+        lines.append("☕ <b>監控狀態</b>：今日交易已結束，下個交易日 09:00 開盤將自動恢復即時盯盤！")
         summary_msg = "\n".join(lines)
         # 收盤總結以靜音發送 (silent=True)
         self.notifier.send(summary_msg, silent=True)
@@ -614,7 +641,10 @@ class LiveEntryRadar:
                 logger.info("[run_once] 收盤時段，發送今日收盤總結")
                 quotes = self.fetch_quotes()
                 if quotes:
-                    self.send_closing_summary(quotes)
+                    radar_missed = not self.daily_flags.get("heartbeat_sent")
+                    if radar_missed:
+                        logger.warning("[run_once] 今日盤中從未成功執行（開盤打卡未發送），排程可能未觸發")
+                    self.send_closing_summary(quotes, radar_missed=radar_missed)
                     self.daily_flags["summary_sent"] = True
                     self._save_daily_state()
             else:
@@ -626,7 +656,7 @@ class LiveEntryRadar:
         if not self.daily_flags.get("heartbeat_sent"):
             logger.info("[run_once] 首次盤中執行，發送 09:00 開盤打卡")
             quotes = self.fetch_quotes()
-            self.send_morning_heartbeat(quotes)
+            self.send_morning_heartbeat(quotes, now=now)
             self.daily_flags["heartbeat_sent"] = True
             self._save_daily_state()
 
