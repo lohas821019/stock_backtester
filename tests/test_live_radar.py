@@ -369,6 +369,7 @@ def test_run_once_closing_summary_flags_missed_radar():
     radar = _make_radar_with_target(notifier)
     fake_now = datetime(2026, 10, 5, 14, 24, 0, tzinfo=TW_TZ)
     with patch("stock_backtester.scanner.live_radar.datetime") as mock_dt, \
+         patch("stock_backtester.scanner.live_radar.is_trading_day", return_value=True), \
          patch.object(radar, "fetch_quotes", return_value=_quote()):
         mock_dt.now.return_value = fake_now
         radar.run_once()
@@ -387,6 +388,7 @@ def test_run_once_closing_summary_normal_when_heartbeat_sent():
     radar.daily_flags["heartbeat_sent"] = True
     fake_now = datetime(2026, 10, 5, 13, 40, 0, tzinfo=TW_TZ)
     with patch("stock_backtester.scanner.live_radar.datetime") as mock_dt, \
+         patch("stock_backtester.scanner.live_radar.is_trading_day", return_value=True), \
          patch.object(radar, "fetch_quotes", return_value=_quote()):
         mock_dt.now.return_value = fake_now
         radar.run_once()
@@ -424,3 +426,21 @@ def test_panic_alert_is_telegram_html_safe():
     assert notifier.send.called
     for call in notifier.send.call_args_list:
         _assert_telegram_html_safe(call[0][0])
+
+
+def test_run_once_skips_everything_on_holiday():
+    from datetime import datetime
+    from stock_backtester.scanner.live_radar import TW_TZ
+
+    notifier = MagicMock()
+    radar = _make_radar_with_target(notifier)
+    fake_now = datetime(2026, 10, 9, 13, 40, 0, tzinfo=TW_TZ)  # 國慶日補假
+    with patch("stock_backtester.scanner.live_radar.datetime") as mock_dt, \
+         patch("stock_backtester.scanner.live_radar.is_trading_day", return_value=False), \
+         patch.object(radar, "fetch_quotes", return_value=_quote()) as mock_fetch:
+        mock_dt.now.return_value = fake_now
+        result = radar.run_once()
+
+    assert result == []
+    assert not notifier.send.called
+    assert not mock_fetch.called

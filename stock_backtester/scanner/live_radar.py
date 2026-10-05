@@ -25,6 +25,7 @@ import pandas as pd
 import requests
 
 from ..data.data_manager import DataManager
+from ..data.trading_calendar import is_trading_day
 from ..notifiers.telegram_notifier import TelegramNotifier
 
 logger = logging.getLogger(__name__)
@@ -630,6 +631,11 @@ class LiveEntryRadar:
             f"(int={cur_time_int}) | 標的: {self.stocks}"
         )
 
+        # ── 休市日（週末 / 國定假日）：不打卡、不檢測、不發收盤總結 ──
+        if not is_trading_day(now.date()):
+            logger.info(f"[run_once] 今日 {now.date()} 為台股休市日，跳過本次檢測")
+            return []
+
         if not self.targets:
             self.load_targets()
 
@@ -695,6 +701,11 @@ class LiveEntryRadar:
             f"上限: {self.max_alerts_per_stock}次 | 啟動時間: {now_start.strftime('%H:%M:%S')} "
             f"(int={cur_time_int_start})"
         )
+
+        # ── 休市日（週末 / 國定假日）：直接結束，不發送任何通知 ──
+        if not is_trading_day(now_start.date()):
+            logger.info(f"今日 {now_start.date()} 為台股休市日，守護行程直接結束。")
+            return
 
         # ── 啟動時已過 13:35：僅發送收盤總結後直接結束，不進入主 loop ──
         if cur_time_int_start >= 1335:
