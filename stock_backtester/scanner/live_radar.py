@@ -9,6 +9,7 @@
 - 收盤 13:35 自動發送當日總結報表。
 """
 
+import html
 import json
 import logging
 import platform
@@ -457,12 +458,12 @@ class LiveEntryRadar:
 
         msg = (
             f"🚨 <b>【{sig['stock']} {sig['name']} 盤中急報】</b>\n\n"
-            f"⚡ <b>觸發訊號：{sig['title']}</b>\n"
+            f"⚡ <b>觸發訊號：{html.escape(sig['title'])}</b>\n"
             f"• 最新成交價：<a href='{quote_url}'><b>${sig['current']:.2f} 元</b></a>\n"
             f"• 策略門檻價：<b>${sig['target']:.2f} 元</b> (差距 {diff_str} 元)\n"
             f"• 季線 MA60：${sig['ma60']:.2f} 元 (乖離 {sig['bias']:+.2f}%)\n"
             f"• 撮合時間：<b>{sig['time']} (盤中即時)</b>\n"
-            f"• 觸發詳情：{sig['detail']}\n"
+            f"• 觸發詳情：{html.escape(sig['detail'])}\n"
             f"• {count_str}\n\n"
             f"{action_tips}\n"
             f"👉 <a href='{quote_url}'>點此查看 {sig['stock']} Yahoo 即時盤面</a>"
@@ -486,16 +487,18 @@ class LiveEntryRadar:
         self,
         quotes: Optional[dict[str, RealtimeQuote]] = None,
         now: Optional[datetime] = None,
-    ) -> None:
+    ) -> bool:
         """
         早晨 09:00 開盤安心打卡通知（以靜音推播發送，手機不震動響鈴）。
         讓上班族一早確認雲端伺服器正常上線，並一覽今日所有監控門檻。
 
         若實際送出時間晚於 HEARTBEAT_LATE_THRESHOLD（09:10），代表排程觸發延遲，
         會在訊息中加註延遲分鐘數，避免延遲被默默吞掉。
+
+        回傳是否發送成功（未設定 notifier 時視為成功，避免無限重試）。
         """
         if not self.notifier:
-            return
+            return True
 
         now = now or datetime.now(tz=TW_TZ)
         today_str = now.date().strftime("%Y-%m-%d")
@@ -518,7 +521,7 @@ class LiveEntryRadar:
                 f"• 🚀 20日突破門檻：<b>${t.roll_20_h:.2f}</b>\n"
                 f"• 🎯 季線回踩區間：${t.pullback_min_p:.2f} ~ ${t.pullback_max_p:.2f} (MA60 ${t.ma60:.2f})\n"
                 f"• 🌟 黃金拉回區間：${t.tier2_min_p:.2f} ~ ${t.tier2_max_p:.2f}\n"
-                f"• 🛑 跌破季線防守：< ${t.ma60 * 0.98:.2f}\n"
+                f"• 🛑 跌破季線防守：&lt; ${t.ma60 * 0.98:.2f}\n"
             )
         lines.append(
             f"🔔 <b>防頻繁機制</b>：每日上限 {self.max_alerts_per_stock} 次 | 碰價冷卻 {self.cooldown_seconds} 秒\n"
@@ -526,8 +529,12 @@ class LiveEntryRadar:
         )
         msg = "\n".join(lines)
         # 開盤打卡以靜音發送 (silent=True)，避免開會干擾
-        self.notifier.send(msg, silent=True)
-        logger.info("已發送早晨 09:00 開盤打卡通知 (靜音模式)")
+        ok = self.notifier.send(msg, silent=True)
+        if ok:
+            logger.info("已發送早晨 09:00 開盤打卡通知 (靜音模式)")
+        else:
+            logger.error("早晨開盤打卡通知發送失敗（Telegram 回傳錯誤）")
+        return bool(ok)
 
     def send_closing_summary(self, quotes: dict[str, RealtimeQuote], radar_missed: bool = False) -> None:
         """
@@ -656,9 +663,11 @@ class LiveEntryRadar:
         if not self.daily_flags.get("heartbeat_sent"):
             logger.info("[run_once] 首次盤中執行，發送 09:00 開盤打卡")
             quotes = self.fetch_quotes()
-            self.send_morning_heartbeat(quotes, now=now)
-            self.daily_flags["heartbeat_sent"] = True
-            self._save_daily_state()
+            if self.send_morning_heartbeat(quotes, now=now):
+                self.daily_flags["heartbeat_sent"] = True
+                self._save_daily_state()
+            else:
+                logger.warning("[run_once] 開盤打卡發送失敗，下次執行將重試")
 
         # 碰價檢測
         quotes = self.fetch_quotes()

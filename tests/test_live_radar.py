@@ -394,3 +394,33 @@ def test_run_once_closing_summary_normal_when_heartbeat_sent():
     msg = notifier.send.call_args[0][0]
     assert "今日盤中雷達未能上線" not in msg
     assert "收盤雷達總結" in msg
+
+
+def _assert_telegram_html_safe(msg: str):
+    """模擬 Telegram HTML parse_mode：只允許 b / a 標籤，其餘 '<' 必須已跳脫。"""
+    import re
+    stripped = re.sub(r"</?b>|<a href='[^']*'>|</a>", "", msg)
+    assert "<" not in stripped, f"未跳脫的 '<' 會導致 Telegram 400: {stripped}"
+
+
+def test_morning_heartbeat_is_telegram_html_safe():
+    notifier = MagicMock()
+    radar = _make_radar_with_target(notifier)
+    radar.send_morning_heartbeat()
+    _assert_telegram_html_safe(notifier.send.call_args[0][0])
+
+
+def test_panic_alert_is_telegram_html_safe():
+    notifier = MagicMock()
+    radar = _make_radar_with_target(notifier)
+    quotes = {
+        "0050": RealtimeQuote(
+            symbol="0050", name="元大台灣50", trade_time="10:00:00",
+            current_price=98.0, open_price=100.0, high_price=100.0,
+            low_price=97.5, yesterday_close=100.0, volume=10000,
+        )
+    }
+    radar.check_and_alert(quotes, send_telegram=True)
+    assert notifier.send.called
+    for call in notifier.send.call_args_list:
+        _assert_telegram_html_safe(call[0][0])
