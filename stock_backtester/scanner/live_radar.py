@@ -650,6 +650,9 @@ class LiveEntryRadar:
 
         # ── 收盤時段 (>= 13:35) ──
         if cur_time_int >= 1335:
+            if cur_time_int >= 1430:
+                logger.warning(f"[run_once] 當前時間 {now.strftime('%H:%M:%S')} 已超過 14:30（延遲過期排程），略過發送收盤總結")
+                return []
             if not self.daily_flags.get("summary_sent"):
                 logger.info("[run_once] 收盤時段，發送今日收盤總結")
                 quotes = self.fetch_quotes()
@@ -707,13 +710,23 @@ class LiveEntryRadar:
             logger.info(f"今日 {now_start.date()} 為台股休市日，守護行程直接結束。")
             return
 
+        # ── 啟動時已過 14:30：超過市場收盤甚久（排程延遲過期），不發送任何通知直接退出 ──
+        if cur_time_int_start >= 1430:
+            logger.warning(f"啟動時間 {now_start.strftime('%H:%M:%S')} 已過 14:30，為延遲過期任務，不發送收盤總結直接退出。")
+            return
+
         # ── 啟動時已過 13:35：僅發送收盤總結後直接結束，不進入主 loop ──
         if cur_time_int_start >= 1335:
-            logger.info("啟動時已過收盤時間 13:35，直接發送收盤總結後結束（不執行盤中監控）。")
-            self.load_targets()
-            quotes = self.fetch_quotes()
-            if quotes:
-                self.send_closing_summary(quotes)
+            if not self.daily_flags.get("summary_sent"):
+                logger.info("啟動時已過收盤時間 13:35，發送今日收盤總結後結束（不執行盤中監控）。")
+                self.load_targets()
+                quotes = self.fetch_quotes()
+                if quotes:
+                    self.send_closing_summary(quotes)
+                    self.daily_flags["summary_sent"] = True
+                    self._save_daily_state()
+            else:
+                logger.info("收盤總結今日已發送過，直接退出。")
             return
 
         self.load_targets()
@@ -724,8 +737,7 @@ class LiveEntryRadar:
 
         start_time = time.time()
         max_seconds = max_duration_hours * 3600
-        summary_sent = False
-        heartbeat_sent = False
+        heartbeat_sent = self.daily_flags.get("heartbeat_sent", False)
 
         while True:
             now = datetime.now(tz=TW_TZ)
@@ -734,10 +746,12 @@ class LiveEntryRadar:
             # 若已過 13:35（收盤結算時間）→ 發收盤總結後結束
             if cur_time_int >= 1335:
                 logger.info(f"到達收盤時間 13:35 (cur={cur_time_int})，準備發送收盤總結。")
-                quotes = self.fetch_quotes()
-                if not summary_sent and quotes:
-                    self.send_closing_summary(quotes)
-                    summary_sent = True
+                if not self.daily_flags.get("summary_sent"):
+                    quotes = self.fetch_quotes()
+                    if quotes:
+                        self.send_closing_summary(quotes)
+                        self.daily_flags["summary_sent"] = True
+                        self._save_daily_state()
                 logger.info("已過收盤時間 13:35，守護行程正常結束。")
                 break
 
@@ -745,8 +759,10 @@ class LiveEntryRadar:
             if cur_time_int >= 900 and not heartbeat_sent:
                 logger.info(f"[{now.strftime('%H:%M:%S')}] 09:00 開盤打卡，抓取報價並發送晨間通知。")
                 quotes = self.fetch_quotes()
-                self.send_morning_heartbeat(quotes)
-                heartbeat_sent = True
+                if self.send_morning_heartbeat(quotes, now=now):
+                    heartbeat_sent = True
+                    self.daily_flags["heartbeat_sent"] = True
+                    self._save_daily_state()
 
             # 若未到 09:00（盤前試撮時段 08:30~08:59:59，排除主力虛假試撮大單），等待開盤
             if cur_time_int < 900:
@@ -756,13 +772,16 @@ class LiveEntryRadar:
 
             # 盤中交易時段 (09:00 ~ 13:30)：即時抓取撮合並檢測碰價
             logger.debug(f"[{now.strftime('%H:%M:%S')}] 盤中巡檢 (cur={cur_time_int})")
-            quotes = self.fetch_quotes()
-            if quotes:
-                signals = self.check_and_alert(quotes, send_telegram=True)
-                if signals:
-                    logger.info(f"[{now.strftime('%H:%M:%S')}] 本輪觸發訊號數: {len(signals)}")
-            else:
-                logger.warning(f"[{now.strftime('%H:%M:%S')}] fetch_quotes 回傳空，可能為網路或 API 問題。")
+            try:
+                quotes = self.fetch_quotes()
+                if quotes:
+                    signals = self.check_and_alert(quotes, send_telegram=True)
+                    if signals:
+                        logger.info(f"[{now.strftime('%H:%M:%S')}] 本輪觸發訊號數: {len(signals)}")
+                else:
+                    logger.warning(f"[{now.strftime('%H:%M:%S')}] fetch_quotes 回傳空，可能為網路或 API 問題。")
+            except Exception as e:
+                logger.error(f"[{now.strftime('%H:%M:%S')}] 盤中巡檢異常: {e}", exc_info=True)
 
             # 超時保護
             if (time.time() - start_time) > max_seconds:

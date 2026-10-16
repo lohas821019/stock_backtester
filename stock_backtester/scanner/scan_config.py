@@ -54,5 +54,9 @@ SCAN_STOCKS: list[StockScanConfig] = build_taiwan_50_configs(
 # 1 = 任一策略買進就通知，2 = 至少 2 個策略同時買進才通知
 MIN_AGREE_STRATEGIES: int = 1
 
+# 是否在每日掃描開跑時發送「開始掃描」通知（靜音推播）
+SEND_START_NOTIFICATION: bool = True
+
 # 是否在「無訊號」時也發送每日摘要（每日健康確認）
 SEND_DAILY_SUMMARY: bool = True
+

@@ -19,7 +19,7 @@ import pandas as pd
 from ..data.data_manager import DataManager
 from ..strategies import get_strategy
 from ..notifiers.telegram_notifier import TelegramNotifier
-from .scan_config import StockScanConfig, MIN_AGREE_STRATEGIES, SEND_DAILY_SUMMARY
+from .scan_config import StockScanConfig, MIN_AGREE_STRATEGIES, SEND_DAILY_SUMMARY, SEND_START_NOTIFICATION
 
 logger = logging.getLogger(__name__)
 
@@ -80,6 +80,12 @@ class DailyScanner:
             ScanSummary
         """
         logger.info("[Scanner] 開始掃描，日期: %s，共 %d 支股票", self._scan_date, len(stocks))
+
+        if SEND_START_NOTIFICATION:
+            try:
+                self._notify_start(stocks)
+            except Exception as e:
+                logger.warning("[Scanner] 發送開始掃描通知失敗：%s", e)
 
         all_results: list[SignalResult] = []
         errors: list[str] = []
@@ -225,3 +231,19 @@ class DailyScanner:
             f"{error_section}"
         )
         self._notifier.send(msg)
+
+    def _notify_start(self, stocks: list[StockScanConfig]) -> None:
+        """發送每日掃描開始通知（以靜音推播發送）。"""
+        stock_list_str = "、".join(f"{s.name or s.symbol}（{s.symbol}）" for s in stocks[:6])
+        if len(stocks) > 6:
+            stock_list_str += f" 等共 {len(stocks)} 檔"
+
+        msg = (
+            f"🔍 <b>【開始進行今日盤後全市場掃描】</b>\n\n"
+            f"📅 掃描日期：{self._scan_date}\n"
+            f"📋 監控標的：共 {len(stocks)} 支股票\n"
+            f"🎯 涵蓋清單：{stock_list_str}\n\n"
+            f"⚙️ 系統正逐一計算策略指標，若有買進訊號將立即推播，掃描完畢後將發送完整總結！"
+        )
+        self._notifier.send(msg, silent=True)
+

@@ -33,20 +33,20 @@ from pathlib import Path
 # 確保可以找到套件
 sys.path.insert(0, str(Path(__file__).parent))
 
-# 載入 .env
+# 載入 .env（若存在），或直接使用系統/GitHub Secrets 環境變數
 def _load_env() -> None:
     env_path = Path(__file__).parent / ".env"
-    if not env_path.exists():
-        print(f"[錯誤] 找不到 .env 檔案：{env_path}")
-        print("請複製 .env.example 為 .env 並填入 Telegram 憑證。")
+    if env_path.exists():
+        with open(env_path) as f:
+            for line in f:
+                line = line.strip()
+                if line and not line.startswith("#") and "=" in line:
+                    key, _, val = line.partition("=")
+                    os.environ.setdefault(key.strip(), val.strip())
+    elif not os.environ.get("TELEGRAM_BOT_TOKEN"):
+        print(f"[錯誤] 找不到 .env 檔案且未設定 TELEGRAM_BOT_TOKEN 環境變數：{env_path}")
+        print("請複製 .env.example 為 .env 並填入 Telegram 憑證，或設定環境變數。")
         sys.exit(1)
-
-    with open(env_path) as f:
-        for line in f:
-            line = line.strip()
-            if line and not line.startswith("#") and "=" in line:
-                key, _, val = line.partition("=")
-                os.environ.setdefault(key.strip(), val.strip())
 
 _load_env()
 
@@ -66,9 +66,17 @@ logger = logging.getLogger("run_daily_scan")
 
 
 def main() -> None:
+    from zoneinfo import ZoneInfo
+    from datetime import datetime
+    from stock_backtester.data.trading_calendar import is_trading_day
     from stock_backtester.notifiers.telegram_notifier import TelegramNotifier
     from stock_backtester.scanner.daily_scanner import DailyScanner
     from stock_backtester.scanner.scan_config import SCAN_STOCKS
+
+    tw_today = datetime.now(tz=ZoneInfo("Asia/Taipei")).date()
+    if not is_trading_day(tw_today):
+        logger.info("📅 今日 %s 為台股休市日（週末或國定假日），略過每日盤後掃描。", tw_today)
+        return
 
     bot_token = os.environ.get("TELEGRAM_BOT_TOKEN", "")
     chat_id = os.environ.get("TELEGRAM_CHAT_ID", "")

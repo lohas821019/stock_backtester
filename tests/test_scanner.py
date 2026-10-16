@@ -165,3 +165,26 @@ class TestDailyScanner:
 
         # 訊號計算是否正確（不強制一定有買進，但不應報錯）
         assert len(summary.errors) == 0
+
+    def test_start_notification_sent(self):
+        """掃描啟動時應發送開始掃描通知。"""
+        fake_notifier = _FakeNotifier()
+        fake_dm = MagicMock()
+        fake_dm.get_ohlcv.return_value = _make_dummy_df()
+
+        stocks = [
+            StockScanConfig(symbol="2330", name="台積電", strategies=["ma_cross"]),
+            StockScanConfig(symbol="0050", name="元大台灣50", strategies=["ma_cross"]),
+        ]
+
+        scanner = DailyScanner(
+            notifier=fake_notifier,
+            data_manager=fake_dm,
+            scan_date=date(2024, 3, 29),
+        )
+        scanner.run(stocks)
+
+        # 應該包含開始掃描通知以及總結通知
+        assert any("開始進行今日盤後全市場掃描" in m for m in fake_notifier.messages)
+        assert any("每日掃描摘要" in m for m in fake_notifier.messages)
+

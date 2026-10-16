@@ -2,41 +2,40 @@ name: 0050 / 0052 盤中實時進場雷達 (Live Intraday Radar)
 
 # ────────────────────────────────────────────────────────────
 # 架構說明：
-#   採用「高頻短任務」模式，每 5 分鐘觸發一次獨立的單次檢測，
-#   取代原本的「單一 daemon 常駐 5 小時」模式。
+#   採用「雲端常駐守護進程 (Live Daemon)」模式，完全在 GitHub Actions 雲端運行：
+#   1. 早盤 08:35 (UTC 00:35) 喚醒啟動（避開整點與 30 分排程擁塞尖峰）
+#   2. 09:00:00 準時發送開盤打卡與進場監控門檻
+#   3. 09:00 ~ 13:30 盤中常駐即時監控（每 30 秒輪詢 TWSE MIS 撮合行情，碰價即刻發送 Telegram 急報）
+#   4. 13:35:00 準時發送收盤總結報表後自動結束
 #
-#   原因：GitHub Actions cron 為「盡力而為」(best-effort)，
-#   對 UTC 凌晨時段（台灣早盤 08:50~09:05）的排程可靠性極低，
-#   歷史記錄顯示 08:50 / 09:05 的 cron 觸發率為 0%。
-#
-#   改為每 5 分鐘短任務後：
-#   - 即使偶爾被跳過，5 分鐘後又會重試
-#   - 每次僅執行 1~2 分鐘，不長時間佔用 runner
-#   - 狀態透過 GitHub Actions Cache 跨次持久化
-#
-#   ⚠️ 實測 (2026-09-22 ~ 10-02)：*/5 的 schedule 每天仍只觸發 1~3 次，
-#   且全部落在台灣 13:59 之後（甚至 18:00~20:00），早盤觸發率依然為 0%。
-#   因此「主要觸發來源」改為外部精準排程器 (cron-job.org / Cloudflare Workers)
-#   透過 GitHub API 呼叫 workflow_dispatch（幾秒內即執行）；
-#   下方 schedule 僅保留作為備援。設定步驟見 README「盤中雷達外部排程」。
+#   排程防禦機制：
+#   - 備援排程：08:52 (UTC 00:52) 備援啟動，若 08:35 已在運行中則自動退出，不重複執行
+#   - 收盤備援：13:37 (UTC 05:37) 備援收盤總結（以 --once 執行）
+#   - 逾期防禦：若 GitHub 排程隊列延遲導致任務於 13:45 之後才啟動，自動辨識並略過，絕不在傍晚誤送
 # ────────────────────────────────────────────────────────────
 
 on:
   schedule:
-    # 備援：台灣時間 09:00~13:55 每 5 分鐘 (UTC 01:00~05:55)，GitHub 不保證準時
-    - cron: '*/5 1-5 * * 1-5'
-  workflow_dispatch: # 主要觸發來源：外部排程器 API 呼叫 / 網頁手動啟動
+    # 主排程：台灣時間週一至週五 08:35 (UTC 00:35) 啟動盤中實時盯盤守護行程
+    - cron: '35 0 * * 1-5'
+    # 備援啟動：08:52 (UTC 00:52)，若主排程已在線則自動安全退出
+    - cron: '52 0 * * 1-5'
+    # 收盤總結備援：13:37 (UTC 05:37)，確保 13:35 收盤總結 100% 準時送達
+    - cron: '37 5 * * 1-5'
+  workflow_dispatch: # 支援在 GitHub 網頁上手動一鍵隨時啟動實時雷達
+
+permissions:
+  actions: read
+  contents: read
 
 concurrency:
   group: intraday-radar-live
-  # 不取消進行中的 run：避免遲到的 schedule 與準時的外部觸發互相取消。
-  # 重複執行是安全的，開盤打卡 / 收盤總結 / 碰價皆由 daily_flags 去重。
   cancel-in-progress: false
 
 jobs:
-  live-radar-check:
+  live-radar-daemon:
     runs-on: ubuntu-latest
-    timeout-minutes: 5  # 單次檢測只需 1~2 分鐘
+    timeout-minutes: 360 # 最長允許 6 小時（台股盤中僅需約 5 小時，08:35 ~ 13:36）
 
     steps:
       - name: 簽出專案代碼 (Checkout repository)
@@ -61,15 +60,40 @@ jobs:
           restore-keys: |
             radar-state-
 
-      - name: 執行盤中實時雷達單次檢測 (Run Live Radar - single check)
+      - name: 執行盤中實時雷達雲端守護行程 (Run Live Intraday Radar)
         env:
+          GH_TOKEN: ${{ github.token }}
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
         run: |
           TW_TIME=$(TZ=Asia/Taipei date '+%Y-%m-%d %H:%M:%S')
-          echo "🕐 當前台灣時間: ${TW_TIME}"
-          echo "⚡ 啟動單次檢測模式（自動根據時段執行開盤打卡/碰價檢測/收盤總結）..."
-          python -m stock_backtester.cli -v watch-live --stocks 0050,0052 --notify --summary --once
+          TW_HOUR=$(TZ=Asia/Taipei date +%H)
+          TW_MIN=$(TZ=Asia/Taipei date +%M)
+          TW_TIME_INT=$(( 10#$TW_HOUR * 100 + 10#$TW_MIN ))
+
+          echo "🕐 當前台灣時間: ${TW_TIME} (時間數值: ${TW_TIME_INT})"
+
+          # ── 1. 隊列逾期防禦：若 GitHub 隊列延遲導致任務於 13:45 之後才啟動，直接結束 ──
+          if [ "$TW_TIME_INT" -gt 1345 ]; then
+            echo "⚠️ 目前已超過台股盤中與收盤結算時段 (13:45)，此為 GitHub 延遲隊列排程，直接略過退出！"
+            exit 0
+          fi
+
+          # ── 2. 多重實例防禦：檢查是否已有其他守護行程在運行中 ──
+          OTHER_RUNS=$(gh run list --workflow=intraday_radar.yml --status in_progress --json databaseId -q "[.[] | select(.databaseId != ${{ github.run_id }})] | length")
+          if [ "$OTHER_RUNS" -gt 0 ]; then
+            echo "⚡ 偵測到已有其他盤中雷達守護行程正在運行中，本備援任務自動安全退出。"
+            exit 0
+          fi
+
+          # ── 3. 根據時段決定運行模式 ──
+          if [ "$TW_TIME_INT" -ge 1335 ]; then
+            echo "📊 收盤結算時段 (13:35~13:45)：執行收盤總結單次檢測..."
+            python -m stock_backtester.cli -v watch-live --stocks 0050,0052 --notify --summary --once
+          else
+            echo "⚡ 盤前/盤中時段：啟動雲端常駐守護行程（每 30 秒即時撮合巡檢，碰價即刻推播，13:35 自動發送總結並結束）..."
+            python -m stock_backtester.cli -v watch-live --stocks 0050,0052 --notify --summary --interval 30 --daemon
+          fi
 
       - name: 儲存今日雷達狀態快取 (Save radar state)
         uses: actions/cache/save@v4

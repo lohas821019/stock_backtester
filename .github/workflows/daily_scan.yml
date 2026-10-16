@@ -1,0 +1,47 @@
+name: 每日盤後全市場選股掃描 (Daily Market Close Scanner)
+
+# ────────────────────────────────────────────────────────────
+# 觸發時機：
+#   每週一至週五台股收盤後 15:10 (UTC 07:10) 自動執行。
+#   支援手動在 GitHub 網頁上點擊 Run workflow 即時觸發。
+# ────────────────────────────────────────────────────────────
+
+on:
+  schedule:
+    # 台灣時間週一至週五 15:10 (UTC 07:10)
+    - cron: '10 7 * * 1-5'
+  workflow_dispatch:
+
+concurrency:
+  group: daily-scan
+  cancel-in-progress: false
+
+jobs:
+  daily-scan:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: 簽出專案代碼 (Checkout repository)
+        uses: actions/checkout@v4
+
+      - name: 設定 Python 環境 (Set up Python)
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+
+      - name: 安裝專案相依套件 (Install dependencies)
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e .
+
+      - name: 執行每日盤後選股掃描 (Run Daily Scan)
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+        run: |
+          TW_TIME=$(TZ=Asia/Taipei date '+%Y-%m-%d %H:%M:%S')
+          echo "🕐 當前台灣時間: ${TW_TIME}"
+          echo "🚀 啟動台股盤後全市場掃描..."
+          python run_daily_scan.py

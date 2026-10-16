@@ -70,25 +70,25 @@ python3 -m pip install -e ".[sinopac]"
 #    並取消 TODO 區塊的 pass/raise 即可啟用
 ```
 
-## 盤中雷達外部排程（準時觸發）
+## 雲端全自動排程（GitHub Actions）
 
-GitHub Actions 的 `schedule` 是 best-effort，實測早盤觸發率為 0%（延遲數小時或直接丟棄），
-因此 `intraday_radar.yml` 改以外部排程器呼叫 `workflow_dispatch` 作為主要觸發來源（通常數秒內執行）。
+本系統所有自動化監控與掃描均已完整部署至 **GitHub Actions 雲端**，完全獨立於本機電腦，電腦關機或休眠皆能正常運作：
 
-1. **建立 GitHub Fine-grained PAT**：GitHub → Settings → Developer settings → Fine-grained tokens
-   - Repository access：只選 `stock_backtester`
-   - Permissions：`Actions: Read and write`（其餘不需要）
-2. **建立 cron-job.org 任務**（免費）：
-   - URL：`https://api.github.com/repos/lohas821019/stock_backtester/actions/workflows/intraday_radar.yml/dispatches`
-   - Method：`POST`，Body：`{"ref":"main"}`
-   - Headers：
-     - `Authorization: Bearer <你的 PAT>`
-     - `Accept: application/vnd.github+json`
-     - `X-GitHub-Api-Version: 2022-11-28`
-   - Schedule（時區選 `Asia/Taipei`）：週一～週五，09:00～13:40 每 5 分鐘
-3. **驗證**：`gh run list --workflow=intraday_radar.yml -L 10`，事件應為 `workflow_dispatch` 且時間與排程一致。
+### 1. 0050 / 0052 盤中實時進場雷達 (`.github/workflows/intraday_radar.yml`)
+- **啟動時間**：台股交易日每週一至週五 **08:35** 自動喚醒。
+- **運行方式**：在 GitHub 雲端 runner 上啟動 **常駐守護進程 (Live Daemon)**，每 30 秒輪詢 TWSE MIS 撮合行情。
+- **09:00:00**：開盤打卡，推播今日 20 日突破價、季線回踩區間等關鍵監控門檻。
+- **09:00 ~ 13:30**：盤中碰價 30 秒內推播 Telegram 急報。
+- **13:35:00**：收盤自動彙整當日行情總結並結束。
+- **防禦機制**：內建防重複實例與逾期防禦（若任務延遲超過 13:45 則自動跳過，絕不於傍晚誤送）。
 
-若當天盤中完全沒跑到，收盤總結會出現「⚠️ 今日盤中雷達未能上線」；若打卡晚於 09:10，會標示延遲分鐘數。
+### 2. 每日盤後全市場選股掃描 (`.github/workflows/daily_scan.yml`)
+- **啟動時間**：台股交易日每週一至週五 **15:10** 自動執行。
+- **運行方式**：自證交所與 TPEX 抓取當日收盤全市場 50 檔成分股數據，計算均線交叉、週 KD 等策略訊號。
+- **推播通知**：開跑發送靜音通知，若有買進訊號即時推播，掃描完畢發送當日全市場總結報表。
+
+> 若需要由外部排程服務（例如 cron-job.org / Cloudflare Workers）在指定秒數呼叫，亦可直接使用 GitHub API 觸發 `workflow_dispatch`。
+
 
 ## 專案結構
 
