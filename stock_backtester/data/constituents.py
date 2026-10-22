@@ -60,7 +60,7 @@ TAIWAN_50_STOCKS: list[dict[str, str]] = [
     {"symbol": "2345", "name": "智邦"},
     {"symbol": "1590", "name": "亞德客-KY"},
     {"symbol": "2301", "name": "光寶科"},
-    {"symbol": "2888", "name": "新光金"},
+    {"symbol": "3017", "name": "奇鋐"},
     {"symbol": "6415", "name": "矽力*-KY"},
 ]
 
